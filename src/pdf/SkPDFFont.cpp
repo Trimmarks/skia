@@ -239,6 +239,7 @@ sk_sp<SkPDFFont> SkPDFFont::GetFontResource(SkPDFCanon* canon,
     sk_sp<SkPDFFont> font;
     switch (type) {
         case SkAdvancedTypefaceMetrics::kType1CID_Font:
+        case SkAdvancedTypefaceMetrics::kCFF_Font:
         case SkAdvancedTypefaceMetrics::kTrueType_Font:
             SkASSERT(multibyte);
             font = sk_make_sp<SkPDFType0Font>(std::move(info), metrics);
@@ -401,6 +402,7 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
                  "or kTrueType_Font.\n", face, fontAsset.get());
     } else {
         switch (type) {
+            case SkAdvancedTypefaceMetrics::kCFF_Font:
             case SkAdvancedTypefaceMetrics::kTrueType_Font: {
                 #ifdef SK_PDF_USE_SFNTLY
                 if (!SkToBool(metrics.fFlags &
@@ -442,6 +444,10 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
     switch (type) {
         case SkAdvancedTypefaceMetrics::kType1CID_Font:
             newCIDFont->insertName("Subtype", "CIDFontType0");
+            break;
+        case SkAdvancedTypefaceMetrics::kCFF_Font:
+            newCIDFont->insertName("Subtype", "CIDFontType0");
+            newCIDFont->insertName("CIDToGIDMap", "Identity");
             break;
         case SkAdvancedTypefaceMetrics::kTrueType_Font:
             newCIDFont->insertName("Subtype", "CIDFontType2");
