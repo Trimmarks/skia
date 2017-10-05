@@ -293,7 +293,11 @@ void SkTypeface::getFamilyName(SkString* name) const {
 
 std::unique_ptr<SkAdvancedTypefaceMetrics> SkTypeface::getAdvancedMetrics() const {
     std::unique_ptr<SkAdvancedTypefaceMetrics> result = this->onGetAdvancedMetrics();
-    if (result && result->fType == SkAdvancedTypefaceMetrics::kTrueType_Font) {
+    if (result && result->fType == SkAdvancedTypefaceMetrics::kOther_Font) {
+        result->fType = SkAdvancedTypefaceMetrics::kCFF_Font;
+    }
+    if (result && (result->fType == SkAdvancedTypefaceMetrics::kCFF_Font ||
+                   result->fType == SkAdvancedTypefaceMetrics::kTrueType_Font)) {
         SkOTTableOS2::Version::V2::Type::Field fsType;
         constexpr SkFontTableTag os2Tag = SkTEndian_SwapBE32(SkOTTableOS2::TAG);
         constexpr size_t fsTypeOffset = offsetof(SkOTTableOS2::Version::V2, fsType);
