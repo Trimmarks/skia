@@ -443,11 +443,8 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
 
     switch (type) {
         case SkAdvancedTypefaceMetrics::kType1CID_Font:
-            newCIDFont->insertName("Subtype", "CIDFontType0");
-            break;
         case SkAdvancedTypefaceMetrics::kCFF_Font:
             newCIDFont->insertName("Subtype", "CIDFontType0");
-            newCIDFont->insertName("CIDToGIDMap", "Identity");
             break;
         case SkAdvancedTypefaceMetrics::kTrueType_Font:
             newCIDFont->insertName("Subtype", "CIDFontType2");
