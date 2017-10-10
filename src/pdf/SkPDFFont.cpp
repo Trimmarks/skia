@@ -402,7 +402,6 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
                  "or kTrueType_Font.\n", face, fontAsset.get());
     } else {
         switch (type) {
-            case SkAdvancedTypefaceMetrics::kCFF_Font:
             case SkAdvancedTypefaceMetrics::kTrueType_Font: {
                 #ifdef SK_PDF_USE_SFNTLY
                 if (!SkToBool(metrics.fFlags &
@@ -426,6 +425,7 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
                 descriptor->insertObjRef("FontFile2", std::move(fontStream));
                 break;
             }
+            case SkAdvancedTypefaceMetrics::kCFF_Font:
             case SkAdvancedTypefaceMetrics::kType1CID_Font: {
                 auto fontStream = sk_make_sp<SkPDFSharedStream>(std::move(fontAsset));
                 fontStream->dict()->insertName("Subtype", "CIDFontType0C");
