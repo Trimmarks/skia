@@ -1605,7 +1605,7 @@ static SK_SFNT_ULONG get_font_type_tag(const SkTypeface_Mac* typeface) {
         case kCTFontFormatTrueType:
             return SkSFNTHeader::fontType_MacTrueType::TAG;
         case kCTFontFormatPostScript:
-            return SkSFNTHeader::fontType_PostScript::TAG;
+            return SkSFNTHeader::fontType_OpenTypeCFF::TAG; // was fontType_PostScript::TAG ('typ1')
         case kCTFontFormatBitmap:
             return SkSFNTHeader::fontType_MacTrueType::TAG;
         case kCTFontFormatUnrecognized:
