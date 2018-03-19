@@ -1,0 +1,70 @@
+diff --git a/src/core/SkTypeface.cpp b/src/core/SkTypeface.cpp
+index d3191e2d39..be5cc27554 100644
+--- a/src/core/SkTypeface.cpp
++++ b/src/core/SkTypeface.cpp
+@@ -293,7 +293,11 @@ void SkTypeface::getFamilyName(SkString* name) const {
+ 
+ std::unique_ptr<SkAdvancedTypefaceMetrics> SkTypeface::getAdvancedMetrics() const {
+     std::unique_ptr<SkAdvancedTypefaceMetrics> result = this->onGetAdvancedMetrics();
+-    if (result && result->fType == SkAdvancedTypefaceMetrics::kTrueType_Font) {
++    if (result && result->fType == SkAdvancedTypefaceMetrics::kOther_Font) {
++        result->fType = SkAdvancedTypefaceMetrics::kCFF_Font;
++    }
++    if (result && (result->fType == SkAdvancedTypefaceMetrics::kCFF_Font ||
++                   result->fType == SkAdvancedTypefaceMetrics::kTrueType_Font)) {
+         SkOTTableOS2::Version::V2::Type::Field fsType;
+         constexpr SkFontTableTag os2Tag = SkTEndian_SwapBE32(SkOTTableOS2::TAG);
+         constexpr size_t fsTypeOffset = offsetof(SkOTTableOS2::Version::V2, fsType);
+diff --git a/src/pdf/SkPDFFont.cpp b/src/pdf/SkPDFFont.cpp
+index 05bd3eb4d9..56a785b894 100644
+--- a/src/pdf/SkPDFFont.cpp
++++ b/src/pdf/SkPDFFont.cpp
+@@ -239,6 +239,7 @@ sk_sp<SkPDFFont> SkPDFFont::GetFontResource(SkPDFCanon* canon,
+     sk_sp<SkPDFFont> font;
+     switch (type) {
+         case SkAdvancedTypefaceMetrics::kType1CID_Font:
++        case SkAdvancedTypefaceMetrics::kCFF_Font:
+         case SkAdvancedTypefaceMetrics::kTrueType_Font:
+             SkASSERT(multibyte);
+             font = sk_make_sp<SkPDFType0Font>(std::move(info), metrics);
+@@ -424,6 +425,7 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
+                 descriptor->insertObjRef("FontFile2", std::move(fontStream));
+                 break;
+             }
++            case SkAdvancedTypefaceMetrics::kCFF_Font:
+             case SkAdvancedTypefaceMetrics::kType1CID_Font: {
+                 auto fontStream = sk_make_sp<SkPDFSharedStream>(std::move(fontAsset));
+                 fontStream->dict()->insertName("Subtype", "CIDFontType0C");
+@@ -441,6 +443,7 @@ void SkPDFType0Font::getFontSubset(SkPDFCanon* canon) {
+ 
+     switch (type) {
+         case SkAdvancedTypefaceMetrics::kType1CID_Font:
++        case SkAdvancedTypefaceMetrics::kCFF_Font:
+             newCIDFont->insertName("Subtype", "CIDFontType0");
+             break;
+         case SkAdvancedTypefaceMetrics::kTrueType_Font:
+diff --git a/src/pdf/SkPDFFont.h b/src/pdf/SkPDFFont.h
+index 5639d87b67..e7bae318d5 100644
+--- a/src/pdf/SkPDFFont.h
++++ b/src/pdf/SkPDFFont.h
+@@ -45,6 +45,7 @@ public:
+ 
+     static bool IsMultiByte(SkAdvancedTypefaceMetrics::FontType type) {
+         return type == SkAdvancedTypefaceMetrics::kType1CID_Font ||
++               type == SkAdvancedTypefaceMetrics::kCFF_Font ||
+                type == SkAdvancedTypefaceMetrics::kTrueType_Font;
+     }
+ 
+diff --git a/src/ports/SkFontHost_mac.cpp b/src/ports/SkFontHost_mac.cpp
+index 5d8723b95f..0d7fee8831 100644
+--- a/src/ports/SkFontHost_mac.cpp
++++ b/src/ports/SkFontHost_mac.cpp
+@@ -1605,7 +1605,7 @@ static SK_SFNT_ULONG get_font_type_tag(const SkTypeface_Mac* typeface) {
+         case kCTFontFormatTrueType:
+             return SkSFNTHeader::fontType_MacTrueType::TAG;
+         case kCTFontFormatPostScript:
+-            return SkSFNTHeader::fontType_PostScript::TAG;
++            return SkSFNTHeader::fontType_OpenTypeCFF::TAG; // was fontType_PostScript::TAG ('typ1')
+         case kCTFontFormatBitmap:
+             return SkSFNTHeader::fontType_MacTrueType::TAG;
+         case kCTFontFormatUnrecognized:
