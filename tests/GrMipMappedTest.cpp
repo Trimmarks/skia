@@ -7,8 +7,6 @@
 
 #include "SkTypes.h"
 
-#if SK_SUPPORT_GPU
-
 #include "GrBackendSurface.h"
 #include "GrBackendTextureImageGenerator.h"
 #include "GrContext.h"
@@ -89,7 +87,13 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrWrappedMipMappedTest, reporter, ctxInfo) {
                 if (isRT) {
                     REPORTER_ASSERT(reporter, texture->texturePriv().mipMapsAreDirty());
                 } else {
+#if 1
+                    // This is temporarily checks that the new image DOES have dirty MIP levels. See
+                    // comment in SkImage_Gpu.cpp, new_wrapped_texture_common().
+                    REPORTER_ASSERT(reporter, texture->texturePriv().mipMapsAreDirty());
+#else
                     REPORTER_ASSERT(reporter, !texture->texturePriv().mipMapsAreDirty());
+#endif
                 }
             } else {
                 REPORTER_ASSERT(reporter, GrMipMapped::kNo == texture->texturePriv().mipMapped());
@@ -145,14 +149,10 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrBackendTextureImageMipMappedTest, reporter,
             }
 
             SkIPoint origin = SkIPoint::Make(0,0);
-            // The transfer function behavior isn't used in the generator so set we set it
-            // arbitrarily here.
-            SkTransferFunctionBehavior behavior = SkTransferFunctionBehavior::kIgnore;
             SkImageInfo imageInfo = SkImageInfo::Make(kSize, kSize, kRGBA_8888_SkColorType,
                                                       kPremul_SkAlphaType);
             sk_sp<GrTextureProxy> genProxy = imageGen->generateTexture(context, imageInfo,
-                                                                       origin, behavior,
-                                                                       willUseMips);
+                                                                       origin, willUseMips);
 
             REPORTER_ASSERT(reporter, genProxy);
             if (!genProxy) {
@@ -289,5 +289,3 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrImageSnapshotMipMappedTest, reporter, ctxIn
         }
     }
 }
-
-#endif

@@ -5,13 +5,15 @@
  * found in the LICENSE file.
  */
 
-#include <cmath>
 #include "SkRRectPriv.h"
 #include "SkScopeExit.h"
 #include "SkBuffer.h"
 #include "SkMalloc.h"
 #include "SkMatrix.h"
 #include "SkScaleToSides.h"
+
+#include <cmath>
+#include <utility>
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -171,8 +173,20 @@ bool SkRRect::initializeRect(const SkRect& rect) {
     return true;
 }
 
-void SkRRect::scaleRadii(const SkRect& rect) {
+// If we can't distinguish one of the radii relative to the other, force it to zero so it
+// doesn't confuse us later. See crbug.com/850350
+//
+static void flush_to_zero(SkScalar& a, SkScalar& b) {
+    SkASSERT(a >= 0);
+    SkASSERT(b >= 0);
+    if (a + b == a) {
+        b = 0;
+    } else if (a + b == b) {
+        a = 0;
+    }
+}
 
+void SkRRect::scaleRadii(const SkRect& rect) {
     // Proportionally scale down all radii to fit. Find the minimum ratio
     // of a side and the radii on that side (for all four sides) and use
     // that to scale down _all_ the radii. This algorithm is from the
@@ -192,6 +206,11 @@ void SkRRect::scaleRadii(const SkRect& rect) {
     scale = compute_min_scale(fRadii[1].fY, fRadii[2].fY, height, scale);
     scale = compute_min_scale(fRadii[2].fX, fRadii[3].fX, width,  scale);
     scale = compute_min_scale(fRadii[3].fY, fRadii[0].fY, height, scale);
+
+    flush_to_zero(fRadii[0].fX, fRadii[1].fX);
+    flush_to_zero(fRadii[1].fY, fRadii[2].fY);
+    flush_to_zero(fRadii[2].fX, fRadii[3].fX);
+    flush_to_zero(fRadii[3].fY, fRadii[0].fY);
 
     if (scale < 1.0) {
         SkScaleToSides::AdjustRadii(width,  scale, &fRadii[0].fX, &fRadii[1].fX);
@@ -430,20 +449,21 @@ bool SkRRect::transform(const SkMatrix& matrix, SkRRect* dst) const {
     }
 
     // Now swap as necessary.
+    using std::swap;
     if (flipX) {
         if (flipY) {
             // Swap with opposite corners
-            SkTSwap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerRight_Corner]);
-            SkTSwap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerLeft_Corner]);
+            swap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerRight_Corner]);
+            swap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerLeft_Corner]);
         } else {
             // Only swap in x
-            SkTSwap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kUpperLeft_Corner]);
-            SkTSwap(dst->fRadii[kLowerRight_Corner], dst->fRadii[kLowerLeft_Corner]);
+            swap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kUpperLeft_Corner]);
+            swap(dst->fRadii[kLowerRight_Corner], dst->fRadii[kLowerLeft_Corner]);
         }
     } else if (flipY) {
         // Only swap in y
-        SkTSwap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerLeft_Corner]);
-        SkTSwap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerRight_Corner]);
+        swap(dst->fRadii[kUpperLeft_Corner], dst->fRadii[kLowerLeft_Corner]);
+        swap(dst->fRadii[kUpperRight_Corner], dst->fRadii[kLowerRight_Corner]);
     }
 
     if (!AreRectAndRadiiValid(dst->fRect, dst->fRadii)) {
@@ -501,9 +521,9 @@ size_t SkRRect::writeToMemory(void* buffer) const {
     return kSizeInMemory;
 }
 
-void SkRRect::writeToBuffer(SkWBuffer* buffer) const {
+void SkRRectPriv::WriteToBuffer(const SkRRect& rr, SkWBuffer* buffer) {
     // Serialize only the rect and corners, but not the derived type tag.
-    buffer->write(this, kSizeInMemory);
+    buffer->write(&rr, SkRRect::kSizeInMemory);
 }
 
 size_t SkRRect::readFromMemory(const void* buffer, size_t length) {
@@ -517,13 +537,13 @@ size_t SkRRect::readFromMemory(const void* buffer, size_t length) {
     return kSizeInMemory;
 }
 
-bool SkRRect::readFromBuffer(SkRBuffer* buffer) {
-    if (buffer->available() < kSizeInMemory) {
+bool SkRRectPriv::ReadFromBuffer(SkRBuffer* buffer, SkRRect* rr) {
+    if (buffer->available() < SkRRect::kSizeInMemory) {
         return false;
     }
     SkRRect storage;
-    return buffer->read(&storage, kSizeInMemory) &&
-           (this->readFromMemory(&storage, kSizeInMemory) == kSizeInMemory);
+    return buffer->read(&storage, SkRRect::kSizeInMemory) &&
+           (rr->readFromMemory(&storage, SkRRect::kSizeInMemory) == SkRRect::kSizeInMemory);
 }
 
 #include "SkString.h"

@@ -6,7 +6,6 @@
 def compile_fn(api, checkout_root, out_dir):
   skia_dir      = checkout_root.join('skia')
   configuration = api.vars.builder_cfg.get('configuration')
-  os            = api.vars.builder_cfg.get('os')
   target_arch   = api.vars.builder_cfg.get('target_arch')
 
   clang_linux = api.vars.slave_dir.join('clang_linux')
@@ -35,6 +34,7 @@ def compile_fn(api, checkout_root, out_dir):
       '-I%s' % sysroot_dir.join('include', 'c++', '4.8.4',
                                 'arm-linux-gnueabihf'),
       '-DMESA_EGL_NO_X11_HEADERS',
+      '-U_GLIBCXX_DEBUG',
     ]
 
     extra_ldflags = [
@@ -84,10 +84,7 @@ def compile_fn(api, checkout_root, out_dir):
   args['extra_ldflags'] = repr(extra_ldflags).replace("'", '"')
 
   gn_args = ' '.join('%s=%s' % (k,v) for (k,v) in sorted(args.iteritems()))
-
-  gn    = 'gn.exe'    if 'Win' in os else 'gn'
-  ninja = 'ninja.exe' if 'Win' in os else 'ninja'
-  gn = skia_dir.join('bin', gn)
+  gn = skia_dir.join('bin', 'gn')
 
   with api.context(cwd=skia_dir, env=env):
     api.run(api.python, 'fetch-gn',
@@ -95,7 +92,7 @@ def compile_fn(api, checkout_root, out_dir):
             infra_step=True)
     api.run(api.step, 'gn gen', cmd=[gn, 'gen', out_dir, '--args=' + gn_args])
     api.run(api.step, 'ninja',
-            cmd=[ninja, '-k', '0', '-C', out_dir, 'nanobench', 'dm'])
+            cmd=['ninja', '-k', '0', '-C', out_dir, 'nanobench', 'dm'])
 
 
 def copy_extra_build_products(api, src, dst):
