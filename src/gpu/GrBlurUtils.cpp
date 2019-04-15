@@ -285,6 +285,7 @@ static void draw_shape_with_mask_filter(GrContext* context,
         // left to do.
         return;
     }
+    assert_alive(paint);
 
     // If the path is hairline, ignore inverse fill.
     bool inverseFilled = shape->inverseFilled() &&
@@ -370,7 +371,7 @@ static void draw_shape_with_mask_filter(GrContext* context,
         SkAssertResult(as_MFB(maskFilter)->asABlur(&rec));
 
         builder[5] = rec.fStyle;  // TODO: we could put this with the other style bits
-        builder[6] = rec.fSigma;
+        builder[6] = SkFloat2Bits(rec.fSigma);
         shape->writeUnstyledKey(&builder[7]);
     }
 
@@ -421,6 +422,7 @@ static void draw_shape_with_mask_filter(GrContext* context,
                 // This path is completely drawn
                 return;
             }
+            assert_alive(paint);
         }
     }
 
