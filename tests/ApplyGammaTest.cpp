@@ -5,16 +5,32 @@
  * found in the LICENSE file.
  */
 
-#include <initializer_list>
-#include "Test.h"
+#include "SkTypes.h"
 
 #if SK_SUPPORT_GPU
-#include "GrContext.h"
 
+#include "GrCaps.h"
+#include "GrContext.h"
+#include "GrContextFactory.h"
+#include "GrContextPriv.h"
+#include "GrShaderCaps.h"
+#include "GrTypes.h"
+#include "SkBitmap.h"
+#include "SkBlendMode.h"
 #include "SkCanvas.h"
+#include "SkColor.h"
 #include "SkColorFilter.h"
+#include "SkColorPriv.h"
+#include "SkImageInfo.h"
+#include "SkPaint.h"
+#include "SkRefCnt.h"
+#include "SkScalar.h"
 #include "SkSurface.h"
+#include "SkTemplates.h"
 #include "SkUtils.h"
+#include "Test.h"
+
+#include <math.h>
 
 /** convert 0..1 linear value to 0..1 srgb */
 static float linear_to_srgb(float linear) {
@@ -105,7 +121,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(ApplyGamma, reporter, ctxInfo) {
     SkAutoTMalloc<uint32_t> read(kW * kH);
 
     // We allow more error on GPUs with lower precision shader variables.
-    float error = context->caps()->shaderCaps()->halfIs32Bits() ? 0.5f : 1.2f;
+    float error = context->contextPriv().caps()->shaderCaps()->halfIs32Bits() ? 0.5f : 1.2f;
 
     for (auto toSRGB : { false, true }) {
         sk_sp<SkSurface> dst(SkSurface::MakeRenderTarget(context, SkBudgeted::kNo, ii));

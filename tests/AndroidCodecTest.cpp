@@ -5,12 +5,25 @@
  * found in the LICENSE file.
  */
 
-#include "SkAndroidCodec.h"
-#include "SkCodec.h"
-#include "SkEncodedImageFormat.h"
-
 #include "Resources.h"
+#include "SkAndroidCodec.h"
+#include "SkBitmap.h"
+#include "SkCodec.h"
+#include "SkCodecImageGenerator.h"
+#include "SkColor.h"
+#include "SkData.h"
+#include "SkEncodedImageFormat.h"
+#include "SkImageGenerator.h"
+#include "SkImageInfo.h"
+#include "SkPixmapPriv.h"
+#include "SkRefCnt.h"
+#include "SkSize.h"
+#include "SkString.h"
+#include "SkTypes.h"
 #include "Test.h"
+
+#include <algorithm>
+#include <memory>
 
 static SkISize times(const SkISize& size, float factor) {
     return { (int) (size.width() * factor), (int) (size.height() * factor) };
@@ -113,6 +126,72 @@ DEF_TEST(AndroidCodec_computeSampleSize, r) {
                           file, sampleSize, computedSampleSize,
                           sampledDims.width(), sampledDims.height(),
                           size.width(), size.height());
+            }
+        }
+    }
+}
+
+DEF_TEST(AndroidCodec_orientation, r) {
+    if (GetResourcePath().isEmpty()) {
+        return;
+    }
+
+    for (const char* ext : { "jpg", "webp" })
+    for (char i = '1'; i <= '8'; ++i) {
+        SkString path = SkStringPrintf("images/orientation/%c.%s", i, ext);
+        auto data = GetResourceAsData(path.c_str());
+        auto gen = SkCodecImageGenerator::MakeFromEncodedCodec(data);
+        if (!gen) {
+            ERRORF(r, "failed to decode %s", path.c_str());
+            return;
+        }
+
+        // Dimensions after adjusting for the origin.
+        const SkISize expectedDims = { 100, 80 };
+
+        // SkCodecImageGenerator automatically adjusts for the origin.
+        REPORTER_ASSERT(r, gen->getInfo().dimensions() == expectedDims);
+
+        auto androidCodec = SkAndroidCodec::MakeFromCodec(SkCodec::MakeFromData(data));
+        if (!androidCodec) {
+            ERRORF(r, "failed to decode %s", path.c_str());
+            return;
+        }
+
+        // SkAndroidCodec does not adjust for the origin by default. Dimensions may be reversed.
+        if (SkPixmapPriv::ShouldSwapWidthHeight(androidCodec->codec()->getOrigin())) {
+            auto swappedDims = SkPixmapPriv::SwapWidthHeight(androidCodec->getInfo()).dimensions();
+            REPORTER_ASSERT(r, expectedDims == swappedDims);
+        } else {
+            REPORTER_ASSERT(r, expectedDims == androidCodec->getInfo().dimensions());
+        }
+
+        // Passing kRespect adjusts for the origin.
+        androidCodec = SkAndroidCodec::MakeFromCodec(SkCodec::MakeFromData(std::move(data)),
+                SkAndroidCodec::ExifOrientationBehavior::kRespect);
+        auto info = androidCodec->getInfo();
+        REPORTER_ASSERT(r, info.dimensions() == expectedDims);
+
+        SkBitmap fromGenerator;
+        fromGenerator.allocPixels(info);
+        REPORTER_ASSERT(r, gen->getPixels(info, fromGenerator.getPixels(),
+                                          fromGenerator.rowBytes()));
+
+        SkBitmap fromAndroidCodec;
+        fromAndroidCodec.allocPixels(info);
+        auto result = androidCodec->getPixels(info, fromAndroidCodec.getPixels(),
+                                              fromAndroidCodec.rowBytes());
+        REPORTER_ASSERT(r, result == SkCodec::kSuccess);
+
+        for (int i = 0; i < info.width();  ++i)
+        for (int j = 0; j < info.height(); ++j) {
+            SkColor c1 = *fromGenerator   .getAddr32(i, j);
+            SkColor c2 = *fromAndroidCodec.getAddr32(i, j);
+            if (c1 != c2) {
+                ERRORF(r, "Bitmaps for %s do not match starting at position %i, %i\n"
+                          "\tfromGenerator: %x\tfromAndroidCodec: %x", path.c_str(), i, j,
+                          c1, c2);
+                return;
             }
         }
     }

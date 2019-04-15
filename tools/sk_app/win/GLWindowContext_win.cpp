@@ -9,7 +9,7 @@
 #include <Windows.h>
 #include <GL/gl.h>
 #include "../GLWindowContext.h"
-#include "GrGLInterface.h"
+#include "gl/GrGLInterface.h"
 #include "WindowContextFactory_win.h"
 #include "win/SkWGL.h"
 
@@ -96,8 +96,9 @@ sk_sp<const GrGLInterface> GLWindowContext_win::onInitializeContext() {
                                               1,
                                               &kSampleCountAttr,
                                               &fSampleCount);
+            fSampleCount = SkTMax(fSampleCount, 1);
         } else {
-            fSampleCount = 0;
+            fSampleCount = 1;
         }
 
         RECT rect;

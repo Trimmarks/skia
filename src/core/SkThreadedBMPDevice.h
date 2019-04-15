@@ -10,6 +10,7 @@
 
 #include "SkBitmapDevice.h"
 #include "SkDraw.h"
+#include "SkRectPriv.h"
 #include "SkTaskGroup2D.h"
 
 class SkThreadedBMPDevice : public SkBitmapDevice {
@@ -30,7 +31,6 @@ protected:
 
     void drawPath(const SkPath&, const SkPaint&, const SkMatrix* prePathMatrix,
                   bool pathIsMutable) override;
-    void drawBitmap(const SkBitmap&, SkScalar x, SkScalar y, const SkPaint&) override;
     void drawSprite(const SkBitmap&, int x, int y, const SkPaint&) override;
 
     void drawText(const void* text, size_t len, SkScalar x, SkScalar y,
@@ -38,11 +38,18 @@ protected:
     void drawPosText(const void* text, size_t len, const SkScalar pos[],
                      int scalarsPerPos, const SkPoint& offset, const SkPaint& paint) override;
     void drawVertices(const SkVertices*, SkBlendMode, const SkPaint&) override;
-    void drawDevice(SkBaseDevice*, int x, int y, const SkPaint&) override;
+
+    void drawBitmap(const SkBitmap&, const SkMatrix&, const SkRect* dstOrNull,
+                    const SkPaint&) override;
+    void drawBitmapRect(const SkBitmap& bitmap, const SkRect* src, const SkRect& dst,
+                        const SkPaint& paint, SkCanvas::SrcRectConstraint constraint) override;
+
+    sk_sp<SkSpecialImage> snapSpecial() override;
 
     void flush() override;
 
 private:
+    // We store DrawState inside DrawElement because inifFn and drawFn both want to use it
     struct DrawState {
         SkPixmap fDst;
         SkMatrix fMatrix;
@@ -59,16 +66,66 @@ private:
         private: SkRasterClip fTileRC;
     };
 
-    struct DrawElement {
+    class DrawElement {
+    public:
+        using InitFn = std::function<void(SkArenaAlloc* threadAlloc, DrawElement* element)>;
         using DrawFn = std::function<void(SkArenaAlloc* threadAlloc, const DrawState& ds,
                                           const SkIRect& tileBounds)>;
 
-        DrawFn      fDrawFn;
-        DrawState   fDS;
-        SkIRect     fDrawBounds;
+        DrawElement() {}
+        DrawElement(SkThreadedBMPDevice* device, DrawFn&& drawFn, const SkIRect& drawBounds)
+                : fInitialized(true)
+                , fDrawFn(std::move(drawFn))
+                , fDS(device)
+                , fDrawBounds(drawBounds) {}
+        DrawElement(SkThreadedBMPDevice* device, InitFn&& initFn, const SkIRect& drawBounds)
+                : fInitialized(false)
+                , fNeedInit(true)
+                , fInitFn(std::move(initFn))
+                , fDS(device)
+                , fDrawBounds(drawBounds) {}
+
+        SK_ALWAYS_INLINE bool tryInitOnce(SkArenaAlloc* alloc) {
+            bool t = true;
+            // If there are multiple threads reaching this point simutaneously,
+            // compare_exchange_strong ensures that only one thread can enter the if condition and
+            // do the initialization.
+            if (!fInitialized && fNeedInit && fNeedInit.compare_exchange_strong(t, false)) {
+#ifdef SK_DEBUG
+                fDrawFn = 0; // Invalidate fDrawFn
+#endif
+                fInitFn(alloc, this);
+                fInitialized = true;
+                SkASSERT(fDrawFn != 0); // Ensure that fInitFn does populate fDrawFn
+                return true;
+            }
+            return false;
+        }
+
+        SK_ALWAYS_INLINE bool tryDraw(const SkIRect& tileBounds, SkArenaAlloc* alloc) {
+            if (!SkIRect::Intersects(tileBounds, fDrawBounds)) {
+                return true;
+            }
+            if (fInitialized) {
+                fDrawFn(alloc, fDS, tileBounds);
+                return true;
+            }
+            return false;
+        }
+
+        SkDraw getDraw() const { return fDS.getDraw(); }
+        void setDrawFn(DrawFn&& fn) { fDrawFn = std::move(fn); }
+
+    private:
+        std::atomic<bool>   fInitialized;
+        std::atomic<bool>   fNeedInit;
+        InitFn              fInitFn;
+        DrawFn              fDrawFn;
+        DrawState           fDS;
+        SkIRect             fDrawBounds;
     };
 
-    class DrawQueue {
+    class DrawQueue : public SkWorkKernel2D {
     public:
         static constexpr int MAX_QUEUE_SIZE = 100000;
 
@@ -79,28 +136,57 @@ private:
         // will start new tasks.
         void finish() { fTasks->finish(); }
 
-        SK_ALWAYS_INLINE void push(const SkRect& rawDrawBounds,
-                                   DrawElement::DrawFn&& drawFn) {
+        // Push a draw command into the queue. If Fn is DrawFn, we're pushing an element without
+        // the need of initialization. If Fn is InitFn, we're pushing an element with init-once
+        // and the InitFn will generate the DrawFn during initialization.
+        template<bool useCTM = true, typename Fn>
+        SK_ALWAYS_INLINE void push(const SkRect& rawDrawBounds, Fn&& fn) {
             if (fSize == MAX_QUEUE_SIZE) {
                 this->reset();
             }
             SkASSERT(fSize < MAX_QUEUE_SIZE);
-
-            DrawElement* element = &fElements[fSize++];
-            element->fDS = DrawState(fDevice);
-            element->fDrawFn = std::move(drawFn);
-            element->fDrawBounds = fDevice->transformDrawBounds(rawDrawBounds);
+            SkIRect drawBounds = fDevice->transformDrawBounds<useCTM>(rawDrawBounds);
+            fElements[fSize].~DrawElement(); // release previous resources to prevent memory leak
+            new (&fElements[fSize++]) DrawElement(fDevice, std::move(fn), drawBounds);
             fTasks->addColumn();
         }
 
+        // SkWorkKernel2D
+        bool initColumn(int column, int thread) override;
+        bool work2D(int row, int column, int thread) override;
+
     private:
-        SkThreadedBMPDevice*            fDevice;
-        std::unique_ptr<SkTaskGroup2D>  fTasks;
-        DrawElement                     fElements[MAX_QUEUE_SIZE];
-        int                             fSize;
+        SkThreadedBMPDevice*                fDevice;
+        std::unique_ptr<SkTaskGroup2D>      fTasks;
+        SkTArray<SkSTArenaAlloc<8 << 10>>   fThreadAllocs; // 8k stack size
+        DrawElement                         fElements[MAX_QUEUE_SIZE];
+        int                                 fSize;
     };
 
-    SkIRect transformDrawBounds(const SkRect& drawBounds) const;
+    template<bool useCTM = true>
+    SkIRect transformDrawBounds(const SkRect& drawBounds) const {
+        if (drawBounds == SkRectPriv::MakeLargest()) {
+            return SkRectPriv::MakeILarge();
+        }
+        SkRect transformedBounds;
+        if (useCTM) {
+            this->ctm().mapRect(&transformedBounds, drawBounds);
+        } else {
+            transformedBounds = drawBounds;
+        }
+        return transformedBounds.roundOut();
+    }
+
+
+
+    template<typename T>
+    T* cloneArray(const T* array, int count) {
+       T* clone = fAlloc.makeArrayDefault<T>(count);
+       memcpy(clone, array, sizeof(T) * count);
+       return clone;
+    }
+
+    SkBitmap snapBitmap(const SkBitmap& bitmap);
 
     const int fTileCnt;
     const int fThreadCnt;
@@ -115,9 +201,26 @@ private:
     SkExecutor* fExecutor = nullptr;
     std::unique_ptr<SkExecutor> fInternalExecutor;
 
+    SkSTArenaAlloc<8 << 10> fAlloc; // so we can allocate memory that lives until flush
+
     DrawQueue fQueue;
 
+    friend struct SkInitOnceData;   // to access DrawElement and DrawState
+    friend class SkDraw;            // to access DrawState
+
     typedef SkBitmapDevice INHERITED;
+};
+
+// Passed to SkDraw::drawXXX to enable threaded draw with init-once. The goal is to reuse as much
+// code as possible from SkDraw. (See SkDraw::drawPath and SkDraw::drawDevPath for an example.)
+struct SkInitOnceData {
+    SkArenaAlloc* fAlloc;
+    SkThreadedBMPDevice::DrawElement* fElement;
+
+    void setEmptyDrawFn() {
+        fElement->setDrawFn([](SkArenaAlloc* threadAlloc, const SkThreadedBMPDevice::DrawState& ds,
+                               const SkIRect& tileBounds){});
+    }
 };
 
 #endif // SkThreadedBMPDevice_DEFINED

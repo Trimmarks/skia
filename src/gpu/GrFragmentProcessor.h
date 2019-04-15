@@ -13,6 +13,7 @@
 class GrCoordTransform;
 class GrGLSLFragmentProcessor;
 class GrInvariantOutput;
+class GrPaint;
 class GrPipeline;
 class GrProcessorKeyBuilder;
 class GrShaderCaps;
@@ -33,8 +34,17 @@ public:
     *  does so by returning a parent FP that multiplies the passed in FPs output by the parent's
     *  input alpha. The passed in FP will not receive an input color.
     */
-    static std::unique_ptr<GrFragmentProcessor> MulOutputByInputAlpha(
-            std::unique_ptr<GrFragmentProcessor>);
+    static std::unique_ptr<GrFragmentProcessor> MulChildByInputAlpha(
+            std::unique_ptr<GrFragmentProcessor> child);
+
+    /**
+     *  Like MulChildByInputAlpha(), but reverses the sense of src and dst. In this case, return
+     *  the input modulated by the child's alpha. The passed in FP will not receive an input color.
+     *
+     *  output = input * child.a
+     */
+    static std::unique_ptr<GrFragmentProcessor> MulInputByChildAlpha(
+            std::unique_ptr<GrFragmentProcessor> child);
 
     /**
      *  This assumes that the input color to the returned processor will be unpremul and that the
@@ -182,6 +192,7 @@ public:
     public:
         explicit Iter(const GrFragmentProcessor* fp) { fFPStack.push_back(fp); }
         explicit Iter(const GrPipeline& pipeline);
+        explicit Iter(const GrPaint&);
         const GrFragmentProcessor* next();
 
     private:

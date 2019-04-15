@@ -16,7 +16,7 @@
 #include "SkSLString.h"
 #include "SkSLStringStream.h"
 
-#ifndef SKSL_STANDALONE
+#if !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
 #include "GrContextOptions.h"
 #include "GrShaderCaps.h"
 #endif
@@ -31,9 +31,11 @@
 #endif // SK_BUILD_FOR_WIN
 #endif // SKSL_STANDALONE
 
+class GrShaderCaps;
+
 namespace SkSL {
 
-#ifdef SKSL_STANDALONE
+#if defined(SKSL_STANDALONE) || !SK_SUPPORT_GPU
 
 // we're being compiled standalone, so we don't have access to caps...
 enum GrGLSLGeneration {
@@ -83,10 +85,6 @@ public:
         return false;
     }
 
-    bool bindlessTextureSupport() const {
-        return false;
-    }
-
     bool dropsTileOnZeroDivide() const {
         return false;
     }
@@ -100,14 +98,6 @@ public:
     }
 
     bool multisampleInterpolationSupport() const {
-        return true;
-    }
-
-    bool sampleVariablesSupport() const {
-        return true;
-    }
-
-    bool sampleMaskOverrideCoverageSupport() const {
         return true;
     }
 
@@ -163,6 +153,14 @@ public:
         return nullptr;
     }
 
+    const char* externalTextureExtensionString() const {
+        return nullptr;
+    }
+
+    const char* secondExternalTextureExtensionString() const {
+        return nullptr;
+    }
+
     const char* versionDeclString() const {
         return "";
     }
@@ -177,6 +175,14 @@ public:
 
     bool canUseFragCoord() const {
         return true;
+    }
+
+    bool incompleteShortIntPrecision() const {
+        return false;
+    }
+
+    const char* fbFetchColorName() const {
+        return nullptr;
     }
 };
 
@@ -309,6 +315,14 @@ public:
         sk_sp<GrShaderCaps> result = sk_make_sp<GrShaderCaps>(GrContextOptions());
         result->fVersionDeclString = "#version 400";
         result->fCanUseFragCoord = false;
+        return result;
+    }
+
+    static sk_sp<GrShaderCaps> IncompleteShortIntPrecision() {
+        sk_sp<GrShaderCaps> result = sk_make_sp<GrShaderCaps>(GrContextOptions());
+        result->fVersionDeclString = "#version 310es";
+        result->fUsesPrecisionModifiers = true;
+        result->fIncompleteShortIntPrecision = true;
         return result;
     }
 };

@@ -33,6 +33,18 @@ link Skia against the headers and libaries found on the system paths.
 use `extra_cflags` and `extra_ldflags` to add include or library paths if
 needed.
 
+A note on software backend performance
+--------------------------------------
+
+A number of routines in Skia's software backend have been written to run
+fastest when compiled by Clang.  If you depend on software rasterization, image
+decoding, or color space conversion and compile Skia with GCC, MSVC or another
+compiler, you will see dramatically worse performance than if you use Clang.
+
+This choice was only a matter of prioritization; there is nothing fundamentally
+wrong with non-Clang compilers.  So if this is a serious issue for you, please
+let us know on the mailing list.
+
 Quickstart
 ----------
 
@@ -66,6 +78,10 @@ Having generated your build files, run Ninja to compile and link Skia.
     ninja -C out/Clang
     ninja -C out/Cached
     ninja -C out/RTTI
+
+If some header files are missing, install the corresponding dependencies
+
+    tools/install_dependencies.sh
 
 Android
 -------
@@ -231,6 +247,9 @@ Windows
 Skia can build on Windows with Visual Studio 2017 or Visual Studio 2015 Update 3.
 If GN is unable to locate either of those, it will print an error message. In that
 case, you can pass your `VC` path to GN via `win_vc`.
+
+Skia can be compiled with the free [Build Tools for Visual Studio
+2017](https://www.visualstudio.com/downloads/#build-tools-for-visual-studio-2017).
 
 The bots use a packaged 2017 toolchain, which Googlers can download like this:
 

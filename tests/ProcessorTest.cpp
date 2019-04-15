@@ -161,7 +161,6 @@ DEF_GPUTEST_FOR_ALL_CONTEXTS(ProcessorRefTest, reporter, ctxInfo) {
     GrResourceProvider* resourceProvider = context->contextPriv().resourceProvider();
 
     GrSurfaceDesc desc;
-    desc.fOrigin = kTopLeft_GrSurfaceOrigin;
     desc.fWidth = 10;
     desc.fHeight = 10;
     desc.fConfig = kRGBA_8888_GrPixelConfig;
@@ -169,18 +168,20 @@ DEF_GPUTEST_FOR_ALL_CONTEXTS(ProcessorRefTest, reporter, ctxInfo) {
     for (bool makeClone : {false, true}) {
         for (int parentCnt = 0; parentCnt < 2; parentCnt++) {
             sk_sp<GrRenderTargetContext> renderTargetContext(
-                    context->makeDeferredRenderTargetContext( SkBackingFit::kApprox, 1, 1,
-                                                              kRGBA_8888_GrPixelConfig, nullptr));
+                    context->contextPriv().makeDeferredRenderTargetContext(
+                                                             SkBackingFit::kApprox, 1, 1,
+                                                             kRGBA_8888_GrPixelConfig, nullptr));
             {
-                bool texelBufferSupport = context->caps()->shaderCaps()->texelBufferSupport();
-                sk_sp<GrTextureProxy> proxy1 =
-                        proxyProvider->createProxy(desc, SkBackingFit::kExact, SkBudgeted::kYes);
-                sk_sp<GrTextureProxy> proxy2 =
-                        proxyProvider->createProxy(desc, SkBackingFit::kExact, SkBudgeted::kYes);
-                sk_sp<GrTextureProxy> proxy3 =
-                        proxyProvider->createProxy(desc, SkBackingFit::kExact, SkBudgeted::kYes);
-                sk_sp<GrTextureProxy> proxy4 =
-                        proxyProvider->createProxy(desc, SkBackingFit::kExact, SkBudgeted::kYes);
+                bool texelBufferSupport =
+                        context->contextPriv().caps()->shaderCaps()->texelBufferSupport();
+                sk_sp<GrTextureProxy> proxy1 = proxyProvider->createProxy(
+                        desc, kTopLeft_GrSurfaceOrigin, SkBackingFit::kExact, SkBudgeted::kYes);
+                sk_sp<GrTextureProxy> proxy2 = proxyProvider->createProxy(
+                        desc, kTopLeft_GrSurfaceOrigin, SkBackingFit::kExact, SkBudgeted::kYes);
+                sk_sp<GrTextureProxy> proxy3 = proxyProvider->createProxy(
+                        desc, kTopLeft_GrSurfaceOrigin, SkBackingFit::kExact, SkBudgeted::kYes);
+                sk_sp<GrTextureProxy> proxy4 = proxyProvider->createProxy(
+                        desc, kTopLeft_GrSurfaceOrigin, SkBackingFit::kExact, SkBudgeted::kYes);
                 sk_sp<GrBuffer> buffer(texelBufferSupport
                         ? resourceProvider->createBuffer(
                                   1024, GrBufferType::kTexel_GrBufferType,
@@ -294,7 +295,6 @@ bool init_test_textures(GrProxyProvider* proxyProvider, SkRandom* random,
                         sk_sp<GrTextureProxy> proxies[2]) {
     static const int kTestTextureSize = 256;
     GrSurfaceDesc desc;
-    desc.fOrigin = kBottomLeft_GrSurfaceOrigin;
     desc.fWidth = kTestTextureSize;
     desc.fHeight = kTestTextureSize;
     desc.fConfig = kRGBA_8888_GrPixelConfig;
@@ -309,8 +309,7 @@ bool init_test_textures(GrProxyProvider* proxyProvider, SkRandom* random,
             }
         }
 
-        proxies[0] = proxyProvider->createTextureProxy(desc, SkBudgeted::kYes,
-                                                       rgbaData.get(),
+        proxies[0] = proxyProvider->createTextureProxy(desc, SkBudgeted::kYes, rgbaData.get(),
                                                        kTestTextureSize * sizeof(GrColor));
     }
 
@@ -324,8 +323,8 @@ bool init_test_textures(GrProxyProvider* proxyProvider, SkRandom* random,
             }
         }
 
-        proxies[1] = proxyProvider->createTextureProxy(desc, SkBudgeted::kYes,
-                                                       alphaData.get(), kTestTextureSize);
+        proxies[1] = proxyProvider->createTextureProxy(desc, SkBudgeted::kYes, alphaData.get(),
+                                                       kTestTextureSize);
     }
 
     return proxies[0] && proxies[1];
@@ -341,13 +340,12 @@ sk_sp<GrTextureProxy> make_input_texture(GrProxyProvider* proxyProvider, int wid
         }
     }
     GrSurfaceDesc desc;
-    desc.fOrigin = kBottomLeft_GrSurfaceOrigin;
     desc.fWidth = width;
     desc.fHeight = height;
     desc.fConfig = kRGBA_8888_GrPixelConfig;
 
-    return proxyProvider->createTextureProxy(desc, SkBudgeted::kYes,
-                                             data.get(), width * sizeof(GrColor));
+    return proxyProvider->createTextureProxy(desc, SkBudgeted::kYes, data.get(),
+                                             width * sizeof(GrColor));
 }
 
 DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(ProcessorOptimizationValidationTest, reporter, ctxInfo) {
@@ -367,7 +365,7 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(ProcessorOptimizationValidationTest, repor
 
     // Make the destination context for the test.
     static constexpr int kRenderSize = 256;
-    sk_sp<GrRenderTargetContext> rtc = context->makeDeferredRenderTargetContext(
+    sk_sp<GrRenderTargetContext> rtc = context->contextPriv().makeDeferredRenderTargetContext(
             SkBackingFit::kExact, kRenderSize, kRenderSize, kRGBA_8888_GrPixelConfig, nullptr);
 
     sk_sp<GrTextureProxy> proxies[2];
@@ -461,8 +459,9 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(ProcessorOptimizationValidationTest, repor
                                    "Processor %s claimed output for const input doesn't match "
                                    "actual output. Error: %f, Tolerance: %f, input: (%f, %f, %f, "
                                    "%f), actual: (%f, %f, %f, %f), expected(%f, %f, %f, %f)",
-                                   fp->name(), SkTMax(rDiff, SkTMax(gDiff, SkTMax(bDiff, aDiff))),
-                                   kTol, input4f.fRGBA[0], input4f.fRGBA[1], input4f.fRGBA[2],
+                                   clone->name(),
+                                   SkTMax(rDiff, SkTMax(gDiff, SkTMax(bDiff, aDiff))), kTol,
+                                   input4f.fRGBA[0], input4f.fRGBA[1], input4f.fRGBA[2],
                                    input4f.fRGBA[3], output4f.fRGBA[0], output4f.fRGBA[1],
                                    output4f.fRGBA[2], output4f.fRGBA[3], expected4f.fRGBA[0],
                                    expected4f.fRGBA[1], expected4f.fRGBA[2], expected4f.fRGBA[3]);
@@ -498,7 +497,7 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(ProcessorCloneTest, reporter, ctxInfo) {
 
     // Make the destination context for the test.
     static constexpr int kRenderSize = 1024;
-    sk_sp<GrRenderTargetContext> rtc = context->makeDeferredRenderTargetContext(
+    sk_sp<GrRenderTargetContext> rtc = context->contextPriv().makeDeferredRenderTargetContext(
             SkBackingFit::kExact, kRenderSize, kRenderSize, kRGBA_8888_GrPixelConfig, nullptr);
 
     sk_sp<GrTextureProxy> proxies[2];

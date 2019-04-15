@@ -10,54 +10,13 @@
 
 #include "SkMath.h"
 #include "SkScalar.h"
-
-/** \struct SkIPoint16
-    SkIPoint holds two 16 bit integer coordinates
-*/
-struct SkIPoint16 {
-    int16_t fX; //!< x-axis value used by SkIPoint16.
-
-    int16_t fY; //!< y-axis value used by SkIPoint16.
-
-    /** Sets fX to x, fY to y. If SK_DEBUG is defined, asserts
-        if x or y does not fit in 16 bits.
-
-        @param x  integer x-axis value of constructed SkIPoint
-        @param y  integer y-axis value of constructed SkIPoint
-        @return   SkIPoint16 (x, y)
-    */
-    static constexpr SkIPoint16 Make(int x, int y) {
-        return {SkToS16(x), SkToS16(y)};
-    }
-
-    /** Returns x-axis value of SkIPoint16.
-
-        @return  fX
-    */
-    int16_t x() const { return fX; }
-
-    /** Returns y-axis value of SkIPoint.
-
-        @return  fY
-    */
-    int16_t y() const { return fY; }
-
-    /** Sets fX to x and fY to y.
-
-        @param x  new value for fX
-        @param y  new value for fY
-    */
-    void set(int x, int y) {
-        fX = SkToS16(x);
-        fY = SkToS16(y);
-    }
-};
+#include "../private/SkSafe32.h"
 
 struct SkIPoint;
 typedef SkIPoint SkIVector;
 
 /** \struct SkIPoint
-    SkIPoint holds two 32 bit integer coordinates
+    SkIPoint holds two 32 bit integer coordinates.
 */
 struct SkIPoint {
     int32_t fX; //!< x-axis value used by SkIPoint.
@@ -115,8 +74,8 @@ struct SkIPoint {
         @param v  ivector to add
     */
     void operator+=(const SkIVector& v) {
-        fX += v.fX;
-        fY += v.fY;
+        fX = Sk32_sat_add(fX, v.fX);
+        fY = Sk32_sat_add(fY, v.fY);
     }
 
     /** Subtracts ivector v from SkIPoint. Sets SkIPoint to: (fX - v.fX, fY - v.fY).
@@ -124,8 +83,8 @@ struct SkIPoint {
         @param v  ivector to subtract
     */
     void operator-=(const SkIVector& v) {
-        fX -= v.fX;
-        fY -= v.fY;
+        fX = Sk32_sat_sub(fX, v.fX);
+        fY = Sk32_sat_sub(fY, v.fY);
     }
 
     /** Returns true if SkIPoint is equivalent to SkIPoint constructed from (x, y).
@@ -167,7 +126,7 @@ struct SkIPoint {
         @return   ivector from b to a
     */
     friend SkIVector operator-(const SkIPoint& a, const SkIPoint& b) {
-        return {a.fX - b.fX, a.fY - b.fY};
+        return { Sk32_sat_sub(a.fX, b.fX), Sk32_sat_sub(a.fY, b.fY) };
     }
 
     /** Returns SkIPoint resulting from SkIPoint a offset by ivector b, computed as: (a.fX + b.fX, a.fY + b.fY).
@@ -180,7 +139,7 @@ struct SkIPoint {
         @return   SkIPoint equal to a offset by b
     */
     friend SkIPoint operator+(const SkIPoint& a, const SkIVector& b) {
-        return {a.fX + b.fX, a.fY + b.fY};
+        return { Sk32_sat_add(a.fX, b.fX), Sk32_sat_add(a.fY, b.fY) };
     }
 };
 
@@ -188,6 +147,7 @@ struct SkPoint;
 typedef SkPoint SkVector;
 
 /** \struct SkPoint
+    SkPoint holds two 32 bit floating point coordinates.
 */
 struct SK_API SkPoint {
 
@@ -552,9 +512,9 @@ struct SK_API SkPoint {
 
     /** Returns the cross product of vector a and vector b.
 
-        a and b form three-dimensional vectors with z equal to zero. The cross product
-        is a three-dimensional vector with x and y equal to zero. The cross product z
-        term equals the returned value.
+        a and b form three-dimensional vectors with z-axis value equal to zero. The
+        cross product is a three-dimensional vector with x-axis and y-axis values equal
+        to zero. The cross product z-axis component is returned.
 
         @param a  left side of cross product
         @param b  right side of cross product
@@ -566,9 +526,9 @@ struct SK_API SkPoint {
 
     /** Returns the cross product of vector and vec.
 
-        Vector and vec form three-dimensional vectors with z equal to zero. The
-        cross product is a three-dimensional vector with x and y equal to zero.
-        The cross product z term equals the returned value.
+        Vector and vec form three-dimensional vectors with z-axis value equal to zero.
+        The cross product is a three-dimensional vector with x-axis and y-axis values
+        equal to zero. The cross product z-axis component is returned.
 
         @param vec  right side of cross product
         @return     area spanned by vectors signed by angle direction

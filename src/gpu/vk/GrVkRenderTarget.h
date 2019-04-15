@@ -35,7 +35,8 @@ public:
                                                    const GrVkImage::ImageDesc&);
 
     static sk_sp<GrVkRenderTarget> MakeWrappedRenderTarget(GrVkGpu*, const GrSurfaceDesc&,
-                                                           const GrVkImageInfo*);
+                                                           const GrVkImageInfo&,
+                                                           sk_sp<GrVkImageLayout>);
 
     ~GrVkRenderTarget() override;
 
@@ -69,7 +70,6 @@ public:
         return true;
     }
 
-    GrBackendObject getRenderTargetHandle() const override;
     GrBackendRenderTarget getBackendRenderTarget() const override;
 
     void getAttachmentsDescriptor(GrVkRenderPass::AttachmentsDescriptor* desc,
@@ -81,7 +81,9 @@ protected:
     GrVkRenderTarget(GrVkGpu* gpu,
                      const GrSurfaceDesc& desc,
                      const GrVkImageInfo& info,
+                     sk_sp<GrVkImageLayout> layout,
                      const GrVkImageInfo& msaaInfo,
+                     sk_sp<GrVkImageLayout> msaaLayout,
                      const GrVkImageView* colorAttachmentView,
                      const GrVkImageView* resolveAttachmentView,
                      GrBackendObjectOwnership);
@@ -89,6 +91,7 @@ protected:
     GrVkRenderTarget(GrVkGpu* gpu,
                      const GrSurfaceDesc& desc,
                      const GrVkImageInfo& info,
+                     sk_sp<GrVkImageLayout> layout,
                      const GrVkImageView* colorAttachmentView,
                      GrBackendObjectOwnership);
 
@@ -99,8 +102,11 @@ protected:
 
     // This accounts for the texture's memory and any MSAA renderbuffer's memory.
     size_t onGpuMemorySize() const override {
-        // The plus 1 is to account for the resolve texture or if not using msaa the RT itself
-        int numColorSamples = this->numColorSamples() + 1;
+        int numColorSamples = this->numColorSamples();
+        if (numColorSamples > 1) {
+            // Add one to account for the resolved VkImage.
+            numColorSamples += 1;
+        }
         return GrSurface::ComputeSize(this->config(), this->width(), this->height(),
                                       numColorSamples, GrMipMapped::kNo);
     }
@@ -116,7 +122,9 @@ private:
                      SkBudgeted,
                      const GrSurfaceDesc& desc,
                      const GrVkImageInfo& info,
+                     sk_sp<GrVkImageLayout> layout,
                      const GrVkImageInfo& msaaInfo,
+                     sk_sp<GrVkImageLayout> msaaLayout,
                      const GrVkImageView* colorAttachmentView,
                      const GrVkImageView* resolveAttachmentView,
                      GrBackendObjectOwnership);
@@ -125,11 +133,13 @@ private:
                      SkBudgeted,
                      const GrSurfaceDesc& desc,
                      const GrVkImageInfo& info,
+                     sk_sp<GrVkImageLayout> layout,
                      const GrVkImageView* colorAttachmentView,
                      GrBackendObjectOwnership);
 
     static GrVkRenderTarget* Create(GrVkGpu*, SkBudgeted, const GrSurfaceDesc&,
-                                    const GrVkImageInfo&, GrBackendObjectOwnership);
+                                    const GrVkImageInfo&, sk_sp<GrVkImageLayout>,
+                                    GrBackendObjectOwnership);
 
     bool completeStencilAttachment() override;
 

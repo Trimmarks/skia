@@ -7,6 +7,7 @@
 
 #include "SkSLHCodeGenerator.h"
 
+#include "SkSLParser.h"
 #include "SkSLUtil.h"
 #include "ir/SkSLEnum.h"
 #include "ir/SkSLFunctionDeclaration.h"
@@ -175,9 +176,9 @@ void HCodeGenerator::writeConstructor() {
         const char* msg = "may not be present when constructor is overridden";
         this->failOnSection(CONSTRUCTOR_CODE_SECTION, msg);
         this->failOnSection(CONSTRUCTOR_PARAMS_SECTION, msg);
-        this->failOnSection(COORD_TRANSFORM_SECTION, msg);
         this->failOnSection(INITIALIZERS_SECTION, msg);
         this->failOnSection(OPTIMIZATION_FLAGS_SECTION, msg);
+        return;
     }
     this->writef("    %s(", fFullName.c_str());
     const char* separator = "";
@@ -252,23 +253,39 @@ void HCodeGenerator::writeFields() {
     }
 }
 
+String HCodeGenerator::GetHeader(const Program& program, ErrorReporter& errors) {
+    SymbolTable types(&errors);
+    Parser parser(program.fSource->c_str(), program.fSource->length(), types, errors);
+    for (;;) {
+        Token header = parser.nextRawToken();
+        switch (header.fKind) {
+            case Token::WHITESPACE:
+                break;
+            case Token::BLOCK_COMMENT:
+                return String(program.fSource->c_str() + header.fOffset, header.fLength);
+            default:
+                return "";
+        }
+    }
+}
+
 bool HCodeGenerator::generateCode() {
+    this->writef("%s\n", GetHeader(fProgram, fErrors).c_str());
     this->writef(kFragmentProcessorHeader, fFullName.c_str());
     this->writef("#ifndef %s_DEFINED\n"
                  "#define %s_DEFINED\n",
                  fFullName.c_str(),
                  fFullName.c_str());
-    this->writef("#include \"SkTypes.h\"\n"
-                 "#if SK_SUPPORT_GPU\n");
+    this->writef("#include \"SkTypes.h\"\n");
     this->writeSection(HEADER_SECTION);
     this->writef("#include \"GrFragmentProcessor.h\"\n"
                  "#include \"GrCoordTransform.h\"\n");
     this->writef("class %s : public GrFragmentProcessor {\n"
                  "public:\n",
                  fFullName.c_str());
-    for (const auto& p : fProgram.fElements) {
-        if (ProgramElement::kEnum_Kind == p->fKind && !((Enum&) *p).fBuiltin) {
-            this->writef("%s\n", p->description().c_str());
+    for (const auto& p : fProgram) {
+        if (ProgramElement::kEnum_Kind == p.fKind && !((Enum&) p).fBuiltin) {
+            this->writef("%s\n", p.description().c_str());
         }
     }
     this->writeSection(CLASS_SECTION);
@@ -299,8 +316,7 @@ bool HCodeGenerator::generateCode() {
     this->writef("    typedef GrFragmentProcessor INHERITED;\n"
                 "};\n");
     this->writeSection(HEADER_END_SECTION);
-    this->writef("#endif\n"
-                 "#endif\n");
+    this->writef("#endif\n");
     return 0 == fErrors.errorCount();
 }
 

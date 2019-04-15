@@ -17,8 +17,6 @@
 #include <functional>
 #include <vector>
 
-struct SkJumper_Engine;
-
 /**
  * SkRasterPipeline provides a cheap way to chain together a pixel processing pipeline.
  *
@@ -41,7 +39,8 @@ struct SkJumper_Engine;
     M(move_src_dst) M(move_dst_src)                                \
     M(clamp_0) M(clamp_1) M(clamp_a) M(clamp_a_dst)                \
     M(unpremul) M(premul) M(premul_dst)                            \
-    M(set_rgb) M(swap_rb) M(invert)                                \
+    M(force_opaque) M(force_opaque_dst)                            \
+    M(set_rgb) M(swap_rb)                                          \
     M(from_srgb) M(from_srgb_dst) M(to_srgb)                       \
     M(black_color) M(white_color) M(uniform_color)                 \
     M(seed_shader) M(dither)                                       \
@@ -53,9 +52,9 @@ struct SkJumper_Engine;
     M(load_f32)  M(load_f32_dst)  M(store_f32)                     \
     M(load_8888) M(load_8888_dst) M(store_8888) M(gather_8888)     \
     M(load_bgra) M(load_bgra_dst) M(store_bgra) M(gather_bgra)     \
+    M(load_1010102) M(load_1010102_dst) M(store_1010102) M(gather_1010102) \
     M(bilerp_clamp_8888)                                           \
-    M(load_u16_be) M(load_rgb_u16_be) M(store_u16_be)              \
-    M(load_tables_u16_be) M(load_tables_rgb_u16_be) M(load_tables) \
+    M(store_u16_be)                                                \
     M(load_rgba) M(store_rgba)                                     \
     M(scale_u8) M(scale_565) M(scale_1_float)                      \
     M( lerp_u8) M( lerp_565) M( lerp_1_float)                      \
@@ -72,10 +71,10 @@ struct SkJumper_Engine;
     M(matrix_perspective)                                          \
     M(parametric_r) M(parametric_g) M(parametric_b)                \
     M(parametric_a) M(gamma) M(gamma_dst)                          \
-    M(table_r) M(table_g) M(table_b) M(table_a)                    \
-    M(lab_to_xyz)                                                  \
-                 M(mirror_x)   M(repeat_x)                         \
-                 M(mirror_y)   M(repeat_y)                         \
+    M(mirror_x)   M(repeat_x)                                      \
+    M(mirror_y)   M(repeat_y)                                      \
+    M(decal_x)    M(decal_y)   M(decal_x_and_y)                    \
+    M(check_decal_mask)                                            \
     M(negate_x)                                                    \
     M(bilinear_nx) M(bilinear_px) M(bilinear_ny) M(bilinear_py)    \
     M(bicubic_n3x) M(bicubic_n1x) M(bicubic_p1x) M(bicubic_p3x)    \
@@ -96,9 +95,8 @@ struct SkJumper_Engine;
     M(alter_2pt_conical_unswap)                                    \
     M(mask_2pt_conical_nan)                                        \
     M(mask_2pt_conical_degenerates) M(apply_vector_mask)           \
-    M(byte_tables) M(byte_tables_rgb)                              \
+    M(byte_tables)                                                 \
     M(rgb_to_hsl) M(hsl_to_rgb)                                    \
-    M(clut_3D) M(clut_4D)                                          \
     M(gauss_a_to_rgba)
 
 class SkRasterPipeline {
@@ -120,6 +118,9 @@ public:
     };
     void append(StockStage, void* = nullptr);
     void append(StockStage stage, const void* ctx) { this->append(stage, const_cast<void*>(ctx)); }
+    // For raw functions (i.e. from a JIT).  Don't use this unless you know exactly what fn needs to
+    // be. :)
+    void append(void* fn, void* ctx);
 
     // Append all stages to this pipeline.
     void extend(const SkRasterPipeline&);
@@ -147,19 +148,19 @@ public:
         this->append_constant_color(alloc, color.vec());
     }
 
-    // Helper to append(seed_shader) with the normal {+0.5,+1.5,+2.5,...} argument it expects.
-    void append_seed_shader();
-
     bool empty() const { return fStages == nullptr; }
 
 private:
     struct StageList {
         StageList* prev;
-        StockStage stage;
+        uint64_t   stage;
         void*      ctx;
+        bool       rawFunction;
     };
 
-    const SkJumper_Engine& build_pipeline(void**) const;
+    using StartPipelineFn = void(*)(size_t,size_t,size_t,size_t, void** program);
+    StartPipelineFn build_pipeline(void**) const;
+
     void unchecked_append(StockStage, void*);
 
     SkArenaAlloc* fAlloc;

@@ -87,6 +87,7 @@ sk_sp<SkSpecialImage> SkSpecialImage::makeTextureImage(GrContext* context) {
         return curContext == context ? sk_sp<SkSpecialImage>(SkRef(this)) : nullptr;
     }
 
+    auto proxyProvider = context->contextPriv().proxyProvider();
     SkBitmap bmp;
     // At this point, we are definitely not texture-backed, so we must be raster or generator
     // backed. If we remove the special-wrapping-an-image subclass, we may be able to assert that
@@ -102,8 +103,7 @@ sk_sp<SkSpecialImage> SkSpecialImage::makeTextureImage(GrContext* context) {
 
     // TODO: this is a tight copy of 'bmp' but it doesn't have to be (given SkSpecialImage's
     // semantics). Since this is cached though we would have to bake the fit into the cache key.
-    sk_sp<GrTextureProxy> proxy = GrMakeCachedBitmapProxy(context->contextPriv().proxyProvider(),
-                                                          bmp);
+    sk_sp<GrTextureProxy> proxy = GrMakeCachedBitmapProxy(proxyProvider, bmp);
     if (!proxy) {
         return nullptr;
     }
@@ -168,8 +168,7 @@ sk_sp<SkImage> SkSpecialImage::asImage(const SkIRect* subset) const {
     return as_SIB(this)->onAsImage(subset);
 }
 
-
-#ifdef SK_DEBUG
+#if defined(SK_DEBUG) || SK_SUPPORT_GPU
 static bool rect_fits(const SkIRect& rect, int width, int height) {
     if (0 == width && 0 == height) {
         SkASSERT(0 == rect.fLeft && 0 == rect.fRight && 0 == rect.fTop && 0 == rect.fBottom);
@@ -409,9 +408,12 @@ public:
         if (!rec) {
             return false;
         }
-
+        sk_sp<SkColorSpace> colorSpace;
+        if (GrPixelConfigIsSRGB(fTextureProxy->config())) {
+            colorSpace = SkColorSpace::MakeSRGB();
+        }
         sk_sp<GrSurfaceContext> sContext = fContext->contextPriv().makeWrappedSurfaceContext(
-                                                                          fTextureProxy, nullptr);
+                fTextureProxy, std::move(colorSpace));
         if (!sContext) {
             return false;
         }
@@ -509,7 +511,10 @@ sk_sp<SkSpecialImage> SkSpecialImage::MakeDeferredFromGpu(GrContext* context,
                                                           sk_sp<SkColorSpace> colorSpace,
                                                           const SkSurfaceProps* props,
                                                           SkAlphaType at) {
-    SkASSERT(rect_fits(subset, proxy->width(), proxy->height()));
+    if (!context || context->contextPriv().abandoned() || !proxy) {
+        return nullptr;
+    }
+    SkASSERT_RELEASE(rect_fits(subset, proxy->width(), proxy->height()));
     return sk_make_sp<SkSpecialImage_Gpu>(context, subset, uniqueID, std::move(proxy), at,
                                           std::move(colorSpace), props);
 }

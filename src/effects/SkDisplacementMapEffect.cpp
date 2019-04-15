@@ -9,6 +9,7 @@
 
 #include "SkBitmap.h"
 #include "SkColorSpaceXformer.h"
+#include "SkFlattenablePriv.h"
 #include "SkImageFilterPriv.h"
 #include "SkReadBuffer.h"
 #include "SkSpecialImage.h"
@@ -88,8 +89,8 @@ void computeDisplacement(Extractor ex, const SkVector& scale, SkBitmap* dst,
             SkScalar displX = scaleForColor.fX * ex.getX(c) + scaleAdj.fX;
             SkScalar displY = scaleForColor.fY * ex.getY(c) + scaleAdj.fY;
             // Truncate the displacement values
-            const int srcX = x + SkScalarTruncToInt(displX);
-            const int srcY = y + SkScalarTruncToInt(displY);
+            const int32_t srcX = Sk32_sat_add(x, SkScalarTruncToInt(displX));
+            const int32_t srcY = Sk32_sat_add(y, SkScalarTruncToInt(displY));
             *dstPtr++ = ((srcX < 0) || (srcX >= srcW) || (srcY < 0) || (srcY >= srcH)) ?
                       0 : *(src.getAddr32(srcX, srcY));
         }
@@ -147,12 +148,12 @@ SkDisplacementMapEffect::~SkDisplacementMapEffect() {
 
 sk_sp<SkFlattenable> SkDisplacementMapEffect::CreateProc(SkReadBuffer& buffer) {
     SK_IMAGEFILTER_UNFLATTEN_COMMON(common, 2);
-    ChannelSelectorType xsel = (ChannelSelectorType)buffer.readInt();
-    ChannelSelectorType ysel = (ChannelSelectorType)buffer.readInt();
+
+    ChannelSelectorType xsel = buffer.read32LE(kLast_ChannelSelectorType);
+    ChannelSelectorType ysel = buffer.read32LE(kLast_ChannelSelectorType);
     SkScalar scale = buffer.readScalar();
-    return Make(xsel, ysel, scale,
-                common.getInput(0), common.getInput(1),
-                &common.cropRect());
+
+    return Make(xsel, ysel, scale, common.getInput(0), common.getInput(1), &common.cropRect());
 }
 
 void SkDisplacementMapEffect::flatten(SkWriteBuffer& buffer) const {
@@ -259,7 +260,7 @@ sk_sp<SkSpecialImage> SkDisplacementMapEffect::onFilterImage(SkSpecialImage* sou
     }
 
     SkIRect displBounds;
-    displ = this->applyCropRect(ctx, displ.get(), &displOffset, &displBounds);
+    displ = this->applyCropRectAndPad(ctx, displ.get(), &displOffset, &displBounds);
     if (!displ) {
         return nullptr;
     }
@@ -269,6 +270,11 @@ sk_sp<SkSpecialImage> SkDisplacementMapEffect::onFilterImage(SkSpecialImage* sou
     }
 
     const SkIRect colorBounds = bounds.makeOffset(-colorOffset.x(), -colorOffset.y());
+    // If the offset overflowed (saturated) then we have to abort, as we need their
+    // dimensions to be equal. See https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=7209
+    if (colorBounds.size() != bounds.size()) {
+        return nullptr;
+    }
 
     SkVector scale = SkVector::Make(fScale, fScale);
     ctx.ctm().mapVectors(&scale, 1);
@@ -306,7 +312,7 @@ sk_sp<SkSpecialImage> SkDisplacementMapEffect::onFilterImage(SkSpecialImage* sou
         matrix.setTranslate(-SkIntToScalar(colorBounds.x()), -SkIntToScalar(colorBounds.y()));
 
         sk_sp<GrRenderTargetContext> renderTargetContext(
-            context->makeDeferredRenderTargetContext(SkBackingFit::kApprox,
+            context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kApprox,
                                                      bounds.width(), bounds.height(),
                                                      GrRenderableConfigForColorSpace(colorSpace),
                                                      sk_ref_sp(colorSpace)));
@@ -383,7 +389,7 @@ SkRect SkDisplacementMapEffect::computeFastBounds(const SkRect& src) const {
 }
 
 SkIRect SkDisplacementMapEffect::onFilterNodeBounds(const SkIRect& src, const SkMatrix& ctm,
-                                                    MapDirection) const {
+                                                    MapDirection, const SkIRect* inputRect) const {
     SkVector scale = SkVector::Make(fScale, fScale);
     ctm.mapVectors(&scale, 1);
     return src.makeOutset(SkScalarCeilToInt(SkScalarAbs(scale.fX) * SK_ScalarHalf),
@@ -391,15 +397,14 @@ SkIRect SkDisplacementMapEffect::onFilterNodeBounds(const SkIRect& src, const Sk
 }
 
 SkIRect SkDisplacementMapEffect::onFilterBounds(const SkIRect& src, const SkMatrix& ctm,
-                                                MapDirection direction) const {
+                                                MapDirection dir, const SkIRect* inputRect) const {
     // Recurse only into color input.
     if (this->getColorInput()) {
-        return this->getColorInput()->filterBounds(src, ctm, direction);
+        return this->getColorInput()->filterBounds(src, ctm, dir, inputRect);
     }
     return src;
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkDisplacementMapEffect::toString(SkString* str) const {
     str->appendf("SkDisplacementMapEffect: (");
     str->appendf("scale: %f ", fScale);
@@ -413,7 +418,6 @@ void SkDisplacementMapEffect::toString(SkString* str) const {
     }
     str->appendf("))");
 }
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 

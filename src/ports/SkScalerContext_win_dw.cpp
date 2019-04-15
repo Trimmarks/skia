@@ -6,7 +6,7 @@
  */
 
 #include "SkTypes.h"
-#if defined(SK_BUILD_FOR_WIN32)
+#if defined(SK_BUILD_FOR_WIN)
 
 #undef GetGlyphIndices
 
@@ -377,12 +377,6 @@ uint16_t SkScalerContext_DW::generateCharToGlyph(SkUnichar uni) {
 }
 
 void SkScalerContext_DW::generateAdvance(SkGlyph* glyph) {
-    //Delta is the difference between the right/left side bearing metric
-    //and where the right/left side bearing ends up after hinting.
-    //DirectWrite does not provide this information.
-    glyph->fRsbDelta = 0;
-    glyph->fLsbDelta = 0;
-
     glyph->fAdvanceX = 0;
     glyph->fAdvanceY = 0;
 
@@ -859,7 +853,7 @@ void SkScalerContext_DW::generateColorGlyphImage(const SkGlyph& glyph) {
     SkDraw draw;
     draw.fDst = SkPixmap(SkImageInfo::MakeN32(glyph.fWidth, glyph.fHeight, kPremul_SkAlphaType),
                          glyph.fImage,
-                         glyph.ComputeRowBytes(glyph.fWidth, SkMask::Format::kARGB32_Format));
+                         glyph.rowBytesUsingFormat(SkMask::Format::kARGB32_Format));
     draw.fMatrix = &matrix;
     draw.fRC = &rc;
 
@@ -967,20 +961,20 @@ void SkScalerContext_DW::generateImage(const SkGlyph& glyph) {
     }
 }
 
-void SkScalerContext_DW::generatePath(SkGlyphID glyph, SkPath* path) {
+bool SkScalerContext_DW::generatePath(SkGlyphID glyph, SkPath* path) {
     SkASSERT(path);
 
     path->reset();
 
     SkTScopedComPtr<IDWriteGeometrySink> geometryToPath;
-    HRVM(SkDWriteGeometrySink::Create(path, &geometryToPath),
+    HRBM(SkDWriteGeometrySink::Create(path, &geometryToPath),
          "Could not create geometry to path converter.");
     UINT16 glyphId = SkTo<UINT16>(glyph);
     {
         SkAutoExclusive l(DWriteFactoryMutex);
         //TODO: convert to<->from DIUs? This would make a difference if hinting.
         //It may not be needed, it appears that DirectWrite only hints at em size.
-        HRVM(this->getDWriteTypeface()->fDWriteFontFace->GetGlyphRunOutline(
+        HRBM(this->getDWriteTypeface()->fDWriteFontFace->GetGlyphRunOutline(
              SkScalarToFloat(fTextSizeRender),
              &glyphId,
              nullptr, //advances
@@ -993,6 +987,7 @@ void SkScalerContext_DW::generatePath(SkGlyphID glyph, SkPath* path) {
     }
 
     path->transform(fSkXform);
+    return true;
 }
 
-#endif//defined(SK_BUILD_FOR_WIN32)
+#endif//defined(SK_BUILD_FOR_WIN)

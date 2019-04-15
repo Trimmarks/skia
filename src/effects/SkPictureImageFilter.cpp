@@ -10,6 +10,7 @@
 #include "SkCanvas.h"
 #include "SkColorSpaceXformCanvas.h"
 #include "SkColorSpaceXformer.h"
+#include "SkFlattenablePriv.h"
 #include "SkImageSource.h"
 #include "SkReadBuffer.h"
 #include "SkSpecialImage.h"
@@ -56,12 +57,8 @@ sk_sp<SkFlattenable> SkPictureImageFilter::CreateProc(SkReadBuffer& buffer) {
     sk_sp<SkPicture> picture;
     SkRect cropRect;
 
-    if (SkPicture::PictureIOSecurityPrecautionsEnabled()) {
-        buffer.validate(!buffer.readBool());
-    } else {
-        if (buffer.readBool()) {
-            picture = SkPicture::MakeFromBuffer(buffer);
-        }
+    if (buffer.readBool()) {
+        picture = SkPicture::MakeFromBuffer(buffer);
     }
     buffer.readRect(&cropRect);
 
@@ -77,14 +74,10 @@ sk_sp<SkFlattenable> SkPictureImageFilter::CreateProc(SkReadBuffer& buffer) {
 }
 
 void SkPictureImageFilter::flatten(SkWriteBuffer& buffer) const {
-    if (SkPicture::PictureIOSecurityPrecautionsEnabled()) {
-        buffer.writeBool(false);
-    } else {
-        bool hasPicture = (fPicture != nullptr);
-        buffer.writeBool(hasPicture);
-        if (hasPicture) {
-            fPicture->flatten(buffer);
-        }
+    bool hasPicture = (fPicture != nullptr);
+    buffer.writeBool(hasPicture);
+    if (hasPicture) {
+        fPicture->flatten(buffer);
     }
     buffer.writeRect(fCropRect);
 }
@@ -139,7 +132,6 @@ sk_sp<SkImageFilter> SkPictureImageFilter::onMakeColorSpace(SkColorSpaceXformer*
     return sk_sp<SkImageFilter>(new SkPictureImageFilter(fPicture, fCropRect, std::move(dstCS)));
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkPictureImageFilter::toString(SkString* str) const {
     str->appendf("SkPictureImageFilter: (");
     str->appendf("crop: (%f,%f,%f,%f) ",
@@ -151,4 +143,3 @@ void SkPictureImageFilter::toString(SkString* str) const {
     }
     str->append(")");
 }
-#endif

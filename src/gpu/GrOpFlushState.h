@@ -12,6 +12,7 @@
 #include "GrAppliedClip.h"
 #include "GrBufferAllocPool.h"
 #include "GrDeferredUpload.h"
+#include "GrUninstantiateProxyTracker.h"
 #include "SkArenaAlloc.h"
 #include "SkArenaAllocList.h"
 #include "ops/GrMeshDrawOp.h"
@@ -24,7 +25,7 @@ class GrResourceProvider;
 /** Tracks the state across all the GrOps (really just the GrDrawOps) in a GrOpList flush. */
 class GrOpFlushState final : public GrDeferredUploadTarget, public GrMeshDrawOp::Target {
 public:
-    GrOpFlushState(GrGpu*, GrResourceProvider*);
+    GrOpFlushState(GrGpu*, GrResourceProvider*, GrTokenTracker*);
 
     ~GrOpFlushState() final { this->reset(); }
 
@@ -67,6 +68,7 @@ public:
 
     /** Overrides of GrDeferredUploadTarget. */
 
+    const GrTokenTracker* tokenTracker() final { return fTokenTracker; }
     GrDeferredUploadToken addInlineUpload(GrDeferredTextureUploadFn&&) final;
     GrDeferredUploadToken addASAPUpload(GrDeferredTextureUploadFn&&) final;
 
@@ -88,6 +90,16 @@ public:
     GrDeferredUploadTarget* deferredUploadTarget() final { return this; }
     const GrCaps& caps() const final;
     GrResourceProvider* resourceProvider() const final { return fResourceProvider; }
+
+    GrGlyphCache* glyphCache() const final;
+
+    // At this point we know we're flushing so full access to the GrAtlasManager is required (and
+    // permissible).
+    GrAtlasManager* atlasManager() const final;
+
+    GrUninstantiateProxyTracker* uninstantiateProxyTracker() {
+        return &fUninstantiateProxyTracker;
+    }
 
 private:
     /** GrMeshDrawOp::Target override. */
@@ -119,7 +131,7 @@ private:
     GrIndexBufferAllocPool fIndexPool;
 
     // Data stored on behalf of the ops being flushed.
-    SkArenaAllocList<GrDeferredTextureUploadFn> fAsapUploads;
+    SkArenaAllocList<GrDeferredTextureUploadFn> fASAPUploads;
     SkArenaAllocList<InlineUpload> fInlineUploads;
     SkArenaAllocList<Draw> fDraws;
     // TODO: These should go in the arena. However, GrGpuCommandBuffer and other classes currently
@@ -136,12 +148,16 @@ private:
 
     GrGpu* fGpu;
     GrResourceProvider* fResourceProvider;
+    GrTokenTracker* fTokenTracker;
     GrGpuCommandBuffer* fCommandBuffer = nullptr;
 
     // Variables that are used to track where we are in lists as ops are executed
     SkArenaAllocList<Draw>::Iter fCurrDraw;
     int fCurrMesh;
     SkArenaAllocList<InlineUpload>::Iter fCurrUpload;
+
+    // Used to track the proxies that need to be uninstantiated after we finish a flush
+    GrUninstantiateProxyTracker fUninstantiateProxyTracker;
 };
 
 #endif

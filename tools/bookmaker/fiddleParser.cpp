@@ -7,32 +7,6 @@
 
 #include "bookmaker.h"
 
-static Definition* find_fiddle(Definition* def, const string& name) {
-    if (MarkType::kExample == def->fMarkType && name == def->fFiddle) {
-        return def;
-    }
-    for (auto& child : def->fChildren) {
-        Definition* result = find_fiddle(child, name);
-        if (result) {
-            return result;
-        }
-    }
-    return nullptr;
-}
-
-Definition* FiddleBase::findExample(const string& name) const {
-    for (const auto& topic : fBmhParser->fTopicMap) {
-        if (topic.second->fParent) {
-            continue;
-        }
-        Definition* def = find_fiddle(topic.second, name);
-        if (def) {
-            return def;
-        }
-    }
-    return nullptr;
-}
-
 bool FiddleBase::parseFiddles() {
     if (!this->skipExact("{\n")) {
         return false;
@@ -170,6 +144,7 @@ bool FiddleParser::textOut(Definition* example, const char* stdOutStart,
                 }
             } else  if (strncmp(bmh.fChar, fiddle.fChar, fiddleLen)) {
                 if (!foundVolatile) {
+                    SkDebugf("%.*s\n", fiddleLen, fiddle.fChar);
                     bmh.reportError("mismatched stdout text\n");
                 }
             }

@@ -5,7 +5,9 @@
  * found in the LICENSE file.
  */
 
+#include "SkAutoMalloc.h"
 #include "SkBitmap.h"
+#include "SkData.h"
 #include "SkDeduper.h"
 #include "SkImage.h"
 #include "SkImageGenerator.h"
@@ -182,7 +184,10 @@ void SkReadBuffer::readMatrix(SkMatrix* matrix) {
     size_t size = 0;
     if (this->isValid()) {
         size = SkMatrixPriv::ReadFromMemory(matrix, fReader.peek(), fReader.available());
-        this->validate((SkAlign4(size) == size) && (0 != size));
+        (void)this->validate((SkAlign4(size) == size) && (0 != size));
+    }
+    if (!this->isValid()) {
+        matrix->reset();
     }
     (void)this->skip(size);
 }
@@ -209,7 +214,9 @@ void SkReadBuffer::readRegion(SkRegion* region) {
     size_t size = 0;
     if (!fError) {
         size = region->readFromMemory(fReader.peek(), fReader.available());
-        this->validate((SkAlign4(size) == size) && (0 != size));
+        if (!this->validate((SkAlign4(size) == size) && (0 != size))) {
+            region->setEmpty();
+        }
     }
     (void)this->skip(size);
 }
@@ -218,7 +225,9 @@ void SkReadBuffer::readPath(SkPath* path) {
     size_t size = 0;
     if (!fError) {
         size = path->readFromMemory(fReader.peek(), fReader.available());
-        this->validate((SkAlign4(size) == size) && (0 != size));
+        if (!this->validate((SkAlign4(size) == size) && (0 != size))) {
+            path->reset();
+        }
     }
     (void)this->skip(size);
 }
@@ -253,6 +262,20 @@ bool SkReadBuffer::readScalarArray(SkScalar* values, size_t size) {
     return this->readArray(values, size, sizeof(SkScalar));
 }
 
+sk_sp<SkData> SkReadBuffer::readByteArrayAsData() {
+    size_t numBytes = this->getArrayCount();
+    if (!this->validate(fReader.isAvailable(numBytes))) {
+        return nullptr;
+    }
+
+    SkAutoMalloc buffer(numBytes);
+    if (!this->readByteArray(buffer.get(), numBytes)) {
+        return nullptr;
+    }
+
+    return SkData::MakeFromMalloc(buffer.release(), numBytes);
+}
+
 uint32_t SkReadBuffer::getArrayCount() {
     const size_t inc = sizeof(uint32_t);
     fError = fError || !IsPtrAlign4(fReader.peek()) || !fReader.isAvailable(inc);
@@ -272,48 +295,48 @@ sk_sp<SkImage> SkReadBuffer::readImage() {
         return nullptr;
     }
 
-    /*
-     *  What follows is a 32bit encoded size.
-     *   0 : failure, nothing else to do
-     *  <0 : negative (int32_t) of a custom encoded blob using SerialProcs
-     *  >0 : standard encoded blob size (use MakeFromEncoded)
-     */
-
-    int32_t encoded_size = this->read32();
-    if (encoded_size == 0) {
+    int32_t size = this->read32();
+    if (size == SK_NaN32) {
+        // 0x80000000 is never valid, since it cannot be passed to abs().
+        this->validate(false);
+        return nullptr;
+    }
+    if (size == 0) {
         // The image could not be encoded at serialization time - return an empty placeholder.
         return MakeEmptyImage(width, height);
     }
-    if (encoded_size == 1) {
+
+    // we used to negate the size for "custom" encoded images -- ignore that signal (Dec-2017)
+    size = SkAbs32(size);
+    if (size == 1) {
         // legacy check (we stopped writing this for "raw" images Nov-2017)
         this->validate(false);
         return nullptr;
     }
 
-    size_t size = SkAbs32(encoded_size);
+    // Preflight check to make sure there's enough stuff in the buffer before
+    // we allocate the memory. This helps the fuzzer avoid OOM when it creates
+    // bad/corrupt input.
+    if (!this->validateCanReadN<uint8_t>(size)) {
+        return nullptr;
+    }
+
     sk_sp<SkData> data = SkData::MakeUninitialized(size);
     if (!this->readPad32(data->writable_data(), size)) {
         this->validate(false);
         return nullptr;
     }
-    int32_t originX = this->read32();
-    int32_t originY = this->read32();
-    if (originX < 0 || originY < 0) {
-        this->validate(false);
-        return nullptr;
+    if (this->isVersionLT(kDontNegateImageSize_Version)) {
+        (void)this->read32();   // originX
+        (void)this->read32();   // originY
     }
 
     sk_sp<SkImage> image;
-    if (encoded_size < 0) {     // custom encoded, need serial proc
-        if (fProcs.fImageProc) {
-            image = fProcs.fImageProc(data->data(), data->size(), fProcs.fImageCtx);
-        } else {
-            // Nothing to do (no client proc), but since we've already "read" the custom data,
-            // wee just leave image as nullptr.
-        }
-    } else {
-        SkIRect subset = SkIRect::MakeXYWH(originX, originY, width, height);
-        image = SkImage::MakeFromEncoded(std::move(data), &subset);
+    if (fProcs.fImageProc) {
+        image = fProcs.fImageProc(data->data(), data->size(), fProcs.fImageCtx);
+    }
+    if (!image) {
+        image = SkImage::MakeFromEncoded(std::move(data));
     }
     // Question: are we correct to return an "empty" image instead of nullptr, if the decoder
     //           failed for some reason?

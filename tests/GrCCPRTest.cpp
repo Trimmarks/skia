@@ -59,7 +59,8 @@ public:
     CCPRPathDrawer(GrContext* ctx, skiatest::Reporter* reporter)
             : fCtx(ctx)
             , fCCPR(fCtx->contextPriv().drawingManager()->getCoverageCountingPathRenderer())
-            , fRTC(fCtx->makeDeferredRenderTargetContext(SkBackingFit::kExact, kCanvasSize,
+            , fRTC(fCtx->contextPriv().makeDeferredRenderTargetContext(
+                                                         SkBackingFit::kExact, kCanvasSize,
                                                          kCanvasSize, kRGBA_8888_GrPixelConfig,
                                                          nullptr)) {
         if (!fCCPR) {
@@ -119,11 +120,13 @@ public:
         GrMockOptions mockOptions;
         mockOptions.fInstanceAttribSupport = true;
         mockOptions.fMapBufferFlags = GrCaps::kCanMap_MapFlag;
-        mockOptions.fConfigOptions[kAlpha_half_GrPixelConfig].fRenderable[0] = true;
+        mockOptions.fConfigOptions[kAlpha_half_GrPixelConfig].fRenderability =
+                GrMockOptions::ConfigOptions::Renderability::kNonMSAA;
         mockOptions.fConfigOptions[kAlpha_half_GrPixelConfig].fTexturable = true;
         mockOptions.fGeometryShaderSupport = true;
         mockOptions.fIntegerSupport = true;
         mockOptions.fFlatInterpolationSupport = true;
+        this->customizeMockOptions(&mockOptions);
 
         GrContextOptions ctxOptions;
         ctxOptions.fAllowPathMaskCaching = false;
@@ -152,6 +155,7 @@ public:
     virtual ~CCPRTest() {}
 
 protected:
+    virtual void customizeMockOptions(GrMockOptions*) {}
     virtual void onRun(skiatest::Reporter* reporter, CCPRPathDrawer& ccpr) = 0;
 
     sk_sp<GrContext>   fMockContext;
@@ -171,6 +175,13 @@ class GrCCPRTest_cleanup : public CCPRTest {
         // Ensure paths get unreffed.
         for (int i = 0; i < 10; ++i) {
             ccpr.drawPath(fPath);
+        }
+        REPORTER_ASSERT(reporter, !SkPathPriv::TestingOnly_unique(fPath));
+        ccpr.flush();
+        REPORTER_ASSERT(reporter, SkPathPriv::TestingOnly_unique(fPath));
+
+        // Ensure clip paths get unreffed.
+        for (int i = 0; i < 10; ++i) {
             ccpr.clipFullscreenRect(fPath);
         }
         REPORTER_ASSERT(reporter, !SkPathPriv::TestingOnly_unique(fPath));
@@ -189,6 +200,13 @@ class GrCCPRTest_cleanup : public CCPRTest {
     }
 };
 DEF_CCPR_TEST(GrCCPRTest_cleanup)
+
+class GrCCPRTest_cleanupWithTexAllocFail : public GrCCPRTest_cleanup {
+    void customizeMockOptions(GrMockOptions* options) override {
+        options->fFailTextureAllocations = true;
+    }
+};
+DEF_CCPR_TEST(GrCCPRTest_cleanupWithTexAllocFail)
 
 class GrCCPRTest_unregisterCulledOps : public CCPRTest {
     void onRun(skiatest::Reporter* reporter, CCPRPathDrawer& ccpr) override {

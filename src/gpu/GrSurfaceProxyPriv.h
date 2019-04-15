@@ -59,7 +59,7 @@ public:
     void assign(sk_sp<GrSurface> surface) { fProxy->assign(std::move(surface)); }
 
     bool requiresNoPendingIO() const {
-        return fProxy->fFlags & GrResourceProvider::kNoPendingIO_Flag;
+        return fProxy->fSurfaceFlags & GrInternalSurfaceFlags::kNoPendingIO;
     }
 
     // Don't abuse this call!!!!!!!
@@ -68,7 +68,17 @@ public:
     // Don't. Just don't.
     void exactify();
 
-    void doLazyInstantiation(GrResourceProvider*);
+    bool doLazyInstantiation(GrResourceProvider*);
+
+    GrSurfaceProxy::LazyInstantiationType lazyInstantiationType() const {
+        return fProxy->fLazyInstantiationType;
+    }
+
+    bool isSafeToUninstantiate() const {
+        return SkToBool(fProxy->fTarget) &&
+               SkToBool(fProxy->fLazyInstantiateCallback) &&
+               GrSurfaceProxy::LazyInstantiationType::kUninstantiate == lazyInstantiationType();
+    }
 
     static bool AttachStencilIfNeeded(GrResourceProvider*, GrSurface*, bool needsStencil);
 

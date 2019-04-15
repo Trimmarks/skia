@@ -9,9 +9,9 @@
 #define GrResourceProvider_DEFINED
 
 #include "GrBuffer.h"
-#include "GrPathRange.h"
+#include "GrContextOptions.h"
 #include "GrResourceCache.h"
-#include "SkImageInfo.h"
+#include "SkImageInfoPriv.h"
 #include "SkScalerContext.h"
 
 class GrBackendRenderTarget;
@@ -39,7 +39,8 @@ class SkTypeface;
  */
 class GrResourceProvider {
 public:
-    GrResourceProvider(GrGpu* gpu, GrResourceCache* cache, GrSingleOwner* owner);
+    GrResourceProvider(GrGpu*, GrResourceCache*, GrSingleOwner*,
+                       GrContextOptions::Enable explicitlyAllocateGPUResources);
 
     /**
      * Finds a resource in the cache, based on the specified key. Prior to calling this, the caller
@@ -66,12 +67,12 @@ public:
      */
     sk_sp<GrTexture> createTexture(const GrSurfaceDesc&, SkBudgeted, uint32_t flags = 0);
 
-    sk_sp<GrTexture> createTexture(const GrSurfaceDesc&, SkBudgeted,
-                                   const GrMipLevel texels[], int mipLevelCount,
-                                   SkDestinationSurfaceColorMode mipColorMode);
+    sk_sp<GrTexture> createTexture(const GrSurfaceDesc&, SkBudgeted, const GrMipLevel texels[],
+                                   int mipLevelCount, SkDestinationSurfaceColorMode mipColorMode);
 
     // Create a potentially loose fit texture with the provided data
-    sk_sp<GrTexture> createTexture(const GrSurfaceDesc&, SkBudgeted, const GrMipLevel&);
+    sk_sp<GrTexture> createTexture(const GrSurfaceDesc&, SkBudgeted, SkBackingFit,
+                                   const GrMipLevel&);
 
     ///////////////////////////////////////////////////////////////////////////
     // Wrapped Backend Surfaces
@@ -88,7 +89,7 @@ public:
                                         GrWrapOwnership = kBorrow_GrWrapOwnership);
 
     /**
-     * This makes the backend texture be renderable. If sampleCnt is > 0 and the underlying API
+     * This makes the backend texture be renderable. If sampleCnt is > 1 and the underlying API
      * uses separate MSAA render buffers then a MSAA render buffer is created that resolves
      * to the texture.
      */
@@ -141,7 +142,7 @@ public:
                                                            int vertCount,
                                                            const GrUniqueKey& key) {
         if (auto buffer = this->findByUniqueKey<GrBuffer>(key)) {
-            return buffer;
+            return std::move(buffer);
         }
         return this->createPatternedIndexBuffer(pattern, patternSize, reps, vertCount, key);
     }
@@ -163,16 +164,15 @@ public:
     static int QuadCountOfQuadBuffer();
 
     /**
-     * Factories for GrPath and GrPathRange objects. It's an error to call these if path rendering
+     * Factories for GrPath objects. It's an error to call these if path rendering
      * is not supported.
      */
     sk_sp<GrPath> createPath(const SkPath&, const GrStyle&);
-    sk_sp<GrPathRange> createPathRange(GrPathRange::PathGenerator*, const GrStyle&);
-    sk_sp<GrPathRange> createGlyphs(const SkTypeface*, const SkScalerContextEffects&,
-                                    const SkDescriptor*, const GrStyle&);
 
     /** These flags govern which scratch resources we are allowed to return */
     enum Flags {
+        kNone_Flag            = 0x0,
+
         /** If the caller intends to do direct reads/writes to/from the CPU then this flag must be
          *  set when accessing resources during a GrOpList flush. This includes the execution of
          *  GrOp objects. The reason is that these memory operations are done immediately and
@@ -257,6 +257,10 @@ public:
     inline GrResourceProviderPriv priv();
     inline const GrResourceProviderPriv priv() const;
 
+    bool explicitlyAllocateGPUResources() const { return fExplicitlyAllocateGPUResources; }
+
+    bool testingOnly_setExplicitlyAllocateGPUResources(bool newValue);
+
 private:
     sk_sp<GrGpuResource> findResourceByUniqueKey(const GrUniqueKey&);
 
@@ -296,6 +300,7 @@ private:
     GrGpu*              fGpu;
     sk_sp<const GrCaps> fCaps;
     GrUniqueKey         fQuadIndexBufferKey;
+    bool                fExplicitlyAllocateGPUResources;
 
     // In debug builds we guard against improper thread handling
     SkDEBUGCODE(mutable GrSingleOwner* fSingleOwner;)

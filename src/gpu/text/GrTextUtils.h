@@ -13,15 +13,16 @@
 #include "SkColorFilter.h"
 #include "SkPaint.h"
 #include "SkScalar.h"
+#include "SkTextToPathIter.h"
 #include "SkTLazy.h"
 
-class GrAtlasGlyphCache;
 class GrAtlasTextBlob;
 class GrAtlasTextOp;
-class GrAtlasTextStrike;
+class GrTextStrike;
 class GrClip;
 class GrColorSpaceXform;
 class GrContext;
+class GrGlyphCache;
 class GrPaint;
 class GrShaderCaps;
 class SkColorSpace;
@@ -107,39 +108,40 @@ public:
      */
     class RunPaint : public Paint {
     public:
-        RunPaint(const Paint* paint, SkDrawFilter* filter, const SkSurfaceProps& props)
-                : fOriginalPaint(paint), fFilter(filter), fProps(props) {
+        RunPaint(const Paint* paint, SkDrawFilter* filter)
+                : fOriginalPaint(paint), fFilter(filter) {
             // Initially we represent the original paint.
             fPaint = &fOriginalPaint->skPaint();
             fDstColorSpaceInfo = fOriginalPaint->dstColorSpaceInfo();
             fFilteredPremulColor = fOriginalPaint->filteredPremulColor();
         }
 
-        bool modifyForRun(const SkTextBlobRunIterator&);
+        bool modifyForRun(std::function<void(SkPaint*)> paintModFunc);
 
     private:
         SkTLazy<SkPaint> fModifiedPaint;
         const Paint* fOriginalPaint;
         SkDrawFilter* fFilter;
-        const SkSurfaceProps& fProps;
     };
 
-    static uint32_t FilterTextFlags(const SkSurfaceProps& surfaceProps, const SkPaint& paint);
+    class PathTextIter : SkTextBaseIter {
+    public:
+        PathTextIter(const char text[], size_t length, const SkPaint& paint,
+                     bool applyStrokeAndPathEffects)
+            : SkTextBaseIter(text, length, paint, applyStrokeAndPathEffects) {
+        }
 
-    static bool ShouldDisableLCD(const SkPaint& paint);
+        const SkPaint&  getPaint() const { return fPaint; }
+        SkScalar        getPathScale() const { return fScale; }
+        const char*     getText() const { return fText; }
 
-    // Functions for drawing large text either as paths or (for color emoji) as scaled glyphs
-    static void DrawBigText(GrContext*, GrTextUtils::Target*, const GrClip& clip,
-                               const SkPaint& paint, const SkMatrix& viewMatrix, const char text[],
-                               size_t byteLength, SkScalar x, SkScalar y,
-                               const SkIRect& clipBounds);
-
-    static void DrawBigPosText(GrContext* context, GrTextUtils::Target*,
-                                  const SkSurfaceProps& props, const GrClip& clip,
-                                  const SkPaint& paint, const SkMatrix& viewMatrix,
-                                  const char text[], size_t byteLength, const SkScalar pos[],
-                                  int scalarsPerPosition, const SkPoint& offset,
-                                  const SkIRect& clipBounds);
+        /**
+         *  Returns false when all of the text has been consumed
+         *  Will set skGlyph if the maskformat is ARGB, and path otherwise. The other will be null.
+         *  If the glyph is zero-width, both will be null.
+         */
+        bool next(const SkGlyph** skGlyph, const SkPath** path, SkScalar* xpos);
+    };
 };
 
 #endif

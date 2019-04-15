@@ -8,6 +8,7 @@
 #include "SkAutoMalloc.h"
 #include "SkCanvasPriv.h"
 #include "SkColorFilter.h"
+#include "SkDrawable.h"
 #include "SkDrawLooper.h"
 #include "SkDrawShadowInfo.h"
 #include "SkImageFilter.h"
@@ -16,7 +17,6 @@
 #include "SkPipeCanvas.h"
 #include "SkPipeFormat.h"
 #include "SkRSXform.h"
-#include "SkRasterizer.h"
 #include "SkShader.h"
 #include "SkStream.h"
 #include "SkTextBlob.h"
@@ -70,7 +70,6 @@ static uint16_t compute_nondef(const SkPaint& paint, PaintUsage usage) {
 
     if (usage & (kText_PaintUsage | kGeometry_PaintUsage | kTextBlob_PaintUsage)) {
         bits |= (paint.getPathEffect()  ? kPathEffect_NonDef : 0);
-        bits |= (paint.getRasterizer()  ? kRasterizer_NonDef : 0);
 
         if (paint.getStyle() != SkPaint::kFill_Style || (usage & kRespectsStroke_PaintUsage)) {
             bits |= (paint.getStrokeWidth() != kStrokeWidth_Default ? kStrokeWidth_NonDef : 0);
@@ -176,7 +175,6 @@ static void write_paint(SkWriteBuffer& writer, const SkPaint& paint, unsigned us
     CHECK_WRITE_FLATTENABLE(writer, nondef, paint, Shader);
     CHECK_WRITE_FLATTENABLE(writer, nondef, paint, MaskFilter);
     CHECK_WRITE_FLATTENABLE(writer, nondef, paint, ColorFilter);
-    CHECK_WRITE_FLATTENABLE(writer, nondef, paint, Rasterizer);
     CHECK_WRITE_FLATTENABLE(writer, nondef, paint, ImageFilter);
     CHECK_WRITE_FLATTENABLE(writer, nondef, paint, DrawLooper);
 }
@@ -228,8 +226,8 @@ SkCanvas::SaveLayerStrategy SkPipeCanvas::getSaveLayerStrategy(const SaveLayerRe
     uint32_t extra = rec.fSaveLayerFlags;
 
     // remap this wacky flag
-    if (extra & (1 << 31)/*SkCanvas::kDontClipToLayer_PrivateSaveLayerFlag*/) {
-        extra &= ~(1 << 31);
+    if (extra & SkCanvasPriv::kDontClipToLayer_SaveLayerFlag) {
+        extra &= ~SkCanvasPriv::kDontClipToLayer_SaveLayerFlag;
         extra |= kDontClipToLayer_SaveLayerMask;
     }
 
@@ -703,6 +701,11 @@ void SkPipeCanvas::onDrawPicture(const SkPicture* picture, const SkMatrix* matri
     if (paint) {
         write_paint(writer, *paint, kSaveLayer_PaintUsage);
     }
+}
+
+void SkPipeCanvas::onDrawDrawable(SkDrawable* drawable, const SkMatrix* matrix) {
+    // TODO: Is there a better solution than just exploding the drawable?
+    drawable->draw(this, matrix);
 }
 
 void SkPipeCanvas::onDrawRegion(const SkRegion& region, const SkPaint& paint) {

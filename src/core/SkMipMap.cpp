@@ -9,6 +9,7 @@
 #include "SkBitmap.h"
 #include "SkColorData.h"
 #include "SkHalf.h"
+#include "SkImageInfoPriv.h"
 #include "SkMathPriv.h"
 #include "SkNx.h"
 #include "SkPM4fPriv.h"
@@ -476,10 +477,10 @@ size_t SkMipMap::AllocLevelsSize(int levelCount, size_t pixelSize) {
         return 0;
     }
     int64_t size = sk_64_mul(levelCount + 1, sizeof(Level)) + pixelSize;
-    if (!sk_64_isS32(size)) {
+    if (!SkTFitsIn<int32_t>(size)) {
         return 0;
     }
-    return sk_64_asS32(size);
+    return SkTo<int32_t>(size);
 }
 
 SkMipMap* SkMipMap::Build(const SkPixmap& src, SkDestinationSurfaceColorMode colorMode,

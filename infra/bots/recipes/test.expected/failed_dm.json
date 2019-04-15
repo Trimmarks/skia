@@ -6,12 +6,27 @@
       "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
       "--json-output",
       "/path/to/tmp/json",
+      "ensure-directory",
+      "--mode",
+      "0777",
+      "[START_DIR]/tmp"
+    ],
+    "infra_step": true,
+    "name": "makedirs tmp_dir"
+  },
+  {
+    "cmd": [
+      "python",
+      "-u",
+      "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
+      "--json-output",
+      "/path/to/tmp/json",
       "copy",
       "[START_DIR]/skia/infra/bots/assets/skp/VERSION",
       "/path/to/tmp/"
     ],
     "infra_step": true,
-    "name": "Get downloaded SKP VERSION"
+    "name": "Get skp VERSION"
   },
   {
     "cmd": [
@@ -39,7 +54,7 @@
       "/path/to/tmp/"
     ],
     "infra_step": true,
-    "name": "Get downloaded skimage VERSION"
+    "name": "Get skimage VERSION"
   },
   {
     "cmd": [
@@ -67,7 +82,7 @@
       "/path/to/tmp/"
     ],
     "infra_step": true,
-    "name": "Get downloaded SVG VERSION"
+    "name": "Get svg VERSION"
   },
   {
     "cmd": [
@@ -90,13 +105,26 @@
       "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
       "--json-output",
       "/path/to/tmp/json",
+      "rmtree",
+      "[START_DIR]/test"
+    ],
+    "infra_step": true,
+    "name": "rmtree test"
+  },
+  {
+    "cmd": [
+      "python",
+      "-u",
+      "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
+      "--json-output",
+      "/path/to/tmp/json",
       "ensure-directory",
       "--mode",
       "0777",
-      "[START_DIR]/tmp"
+      "[START_DIR]/test"
     ],
     "infra_step": true,
-    "name": "makedirs tmp_dir"
+    "name": "makedirs test"
   },
   {
     "cmd": [
@@ -106,10 +134,8 @@
       "[START_DIR]/tmp/uninteresting_hashes.txt"
     ],
     "env": {
-      "BUILDTYPE": "Debug",
       "CHROME_HEADLESS": "1",
-      "PATH": "<PATH>:RECIPE_PACKAGE_REPO[depot_tools]",
-      "SKIA_OUT": "[START_DIR]/out"
+      "PATH": "<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "infra_step": true,
     "name": "get uninteresting hashes",
@@ -182,7 +208,7 @@
       "RECIPE_MODULE[skia::flavor]/resources/symbolize_stack_trace.py",
       "[START_DIR]",
       "catchsegv",
-      "[START_DIR]/out/Debug/dm",
+      "[START_DIR]/build/out/Debug/dm",
       "--resourcePath",
       "[START_DIR]/skia/resources",
       "--skps",
@@ -223,22 +249,22 @@
       "--uninterestingHashesFile",
       "[START_DIR]/tmp/uninteresting_hashes.txt",
       "--writePath",
-      "[CUSTOM_[SWARM_OUT_DIR]]/dm",
+      "[START_DIR]/[SWARM_OUT_DIR]/dm",
       "--dont_write",
       "pdf",
       "--randomProcessorTest",
       "--nogpu",
       "--config",
       "8888",
-      "srgb",
       "pdf",
       "g8",
       "565",
       "f16",
-      "sp-8888",
-      "2ndpic-8888",
       "lite-8888",
       "gbr-8888",
+      "srgb",
+      "srgbnl",
+      "esrgb",
       "serialize-8888",
       "tiles_rt-8888",
       "pic-8888",
@@ -391,6 +417,10 @@
       "serialize-8888",
       "gm",
       "_",
+      "persp_images",
+      "serialize-8888",
+      "gm",
+      "_",
       "all_bitmap_configs",
       "serialize-8888",
       "gm",
@@ -408,15 +438,7 @@
       "gm",
       "_",
       "bleed_alpha_image_shader",
-      "sp-8888",
-      "gm",
-      "_",
-      "drawfilter",
       "pic-8888",
-      "gm",
-      "_",
-      "drawfilter",
-      "2ndpic-8888",
       "gm",
       "_",
       "drawfilter",
@@ -424,15 +446,7 @@
       "gm",
       "_",
       "drawfilter",
-      "sp-8888",
-      "gm",
-      "_",
-      "image-cacherator-from-picture",
       "pic-8888",
-      "gm",
-      "_",
-      "image-cacherator-from-picture",
-      "2ndpic-8888",
       "gm",
       "_",
       "image-cacherator-from-picture",
@@ -440,15 +454,7 @@
       "gm",
       "_",
       "image-cacherator-from-picture",
-      "sp-8888",
-      "gm",
-      "_",
-      "image-cacherator-from-raster",
       "pic-8888",
-      "gm",
-      "_",
-      "image-cacherator-from-raster",
-      "2ndpic-8888",
       "gm",
       "_",
       "image-cacherator-from-raster",
@@ -456,15 +462,7 @@
       "gm",
       "_",
       "image-cacherator-from-raster",
-      "sp-8888",
-      "gm",
-      "_",
-      "image-cacherator-from-ctable",
       "pic-8888",
-      "gm",
-      "_",
-      "image-cacherator-from-ctable",
-      "2ndpic-8888",
       "gm",
       "_",
       "image-cacherator-from-ctable",
@@ -472,10 +470,6 @@
       "gm",
       "_",
       "image-cacherator-from-ctable",
-      "sp-8888",
-      "gm",
-      "_",
-      "gamut",
       "pic-8888",
       "gm",
       "_",
@@ -484,18 +478,10 @@
       "gm",
       "_",
       "gamut",
-      "2ndpic-8888",
-      "gm",
-      "_",
-      "gamut",
       "serialize-8888",
       "gm",
       "_",
       "gamut",
-      "sp-8888",
-      "gm",
-      "_",
-      "complexclip4_bw",
       "pic-8888",
       "gm",
       "_",
@@ -504,27 +490,15 @@
       "gm",
       "_",
       "complexclip4_bw",
-      "2ndpic-8888",
-      "gm",
-      "_",
-      "complexclip4_bw",
       "serialize-8888",
       "gm",
       "_",
       "complexclip4_bw",
-      "sp-8888",
-      "gm",
-      "_",
-      "complexclip4_aa",
       "pic-8888",
       "gm",
       "_",
       "complexclip4_aa",
       "lite-8888",
-      "gm",
-      "_",
-      "complexclip4_aa",
-      "2ndpic-8888",
       "gm",
       "_",
       "complexclip4_aa",
@@ -545,10 +519,8 @@
     ],
     "cwd": "[START_DIR]/skia",
     "env": {
-      "BUILDTYPE": "Debug",
       "CHROME_HEADLESS": "1",
-      "PATH": "<PATH>:RECIPE_PACKAGE_REPO[depot_tools]",
-      "SKIA_OUT": "[START_DIR]/out"
+      "PATH": "<PATH>:RECIPE_PACKAGE_REPO[depot_tools]"
     },
     "name": "symbolized dm",
     "~followup_annotations": [

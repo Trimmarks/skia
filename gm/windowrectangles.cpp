@@ -11,13 +11,15 @@
 #include "SkRRect.h"
 
 #if SK_SUPPORT_GPU
-#  include "GrAppliedClip.h"
-#  include "GrStencilClip.h"
-#  include "GrReducedClip.h"
-#  include "GrRenderTargetContext.h"
-#  include "GrRenderTargetContextPriv.h"
-#  include "GrResourceProvider.h"
-#  include "effects/GrTextureDomain.h"
+#include "GrAppliedClip.h"
+#include "GrCaps.h"
+#include "GrContextPriv.h"
+#include "GrReducedClip.h"
+#include "GrRenderTargetContext.h"
+#include "GrRenderTargetContextPriv.h"
+#include "GrResourceProvider.h"
+#include "GrStencilClip.h"
+#include "effects/GrTextureDomain.h"
 #endif
 
 constexpr static SkIRect kDeviceRect = {0, 0, 600, 600};
@@ -199,7 +201,8 @@ void WindowRectanglesMaskGM::visualizeAlphaMask(GrContext* ctx, GrRenderTargetCo
     const int padRight = (kDeviceRect.right() - kCoverRect.right()) / 2;
     const int padBottom = (kDeviceRect.bottom() - kCoverRect.bottom()) / 2;
     sk_sp<GrRenderTargetContext> maskRTC(
-        ctx->makeDeferredRenderTargetContextWithFallback(SkBackingFit::kExact,
+        ctx->contextPriv().makeDeferredRenderTargetContextWithFallback(
+                                                         SkBackingFit::kExact,
                                                          kCoverRect.width() + padRight,
                                                          kCoverRect.height() + padBottom,
                                                          kAlpha_8_GrPixelConfig, nullptr));
@@ -276,8 +279,9 @@ void WindowRectanglesMaskGM::fail(SkCanvas* canvas) {
 
     canvas->clipRect(SkRect::Make(kCoverRect));
     canvas->clear(SK_ColorWHITE);
-    canvas->drawString(errorMsg, SkIntToScalar(kCoverRect.centerX()),
-                     SkIntToScalar(kCoverRect.centerY() - 10), paint);
+
+    canvas->drawString(errorMsg, SkIntToScalar((kCoverRect.left() + kCoverRect.right())/2),
+                     SkIntToScalar((kCoverRect.top() + kCoverRect.bottom())/2 - 10), paint);
 }
 
 DEF_GM( return new WindowRectanglesMaskGM(); )

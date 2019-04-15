@@ -64,7 +64,7 @@ struct Segment {
 
 typedef SkTArray<Segment, true> SegmentArray;
 
-static void center_of_mass(const SegmentArray& segments, SkPoint* c) {
+static bool center_of_mass(const SegmentArray& segments, SkPoint* c) {
     SkScalar area = 0;
     SkPoint center = {0, 0};
     int count = segments.count();
@@ -111,15 +111,17 @@ static void center_of_mass(const SegmentArray& segments, SkPoint* c) {
         // undo the translate of p0 to the origin.
         *c = center + p0;
     }
-    SkASSERT(!SkScalarIsNaN(c->fX) && !SkScalarIsNaN(c->fY));
+    return !SkScalarIsNaN(c->fX) && !SkScalarIsNaN(c->fY) && c->isFinite();
 }
 
-static void compute_vectors(SegmentArray* segments,
+static bool compute_vectors(SegmentArray* segments,
                             SkPoint* fanPt,
                             SkPathPriv::FirstDirection dir,
                             int* vCount,
                             int* iCount) {
-    center_of_mass(*segments, fanPt);
+    if (!center_of_mass(*segments, fanPt)) {
+        return false;
+    }
     int count = segments->count();
 
     // Make the normals point towards the outside
@@ -167,6 +169,7 @@ static void compute_vectors(SegmentArray* segments,
         *vCount += 4;
         *iCount += 6;
     }
+    return true;
 }
 
 struct DegenerateTestData {
@@ -325,8 +328,7 @@ static bool get_segments(const SkPath& path,
                 if (degenerateData.isDegenerate()) {
                     return false;
                 } else {
-                    compute_vectors(segments, fanPt, dir, vCount, iCount);
-                    return true;
+                    return compute_vectors(segments, fanPt, dir, vCount, iCount);
                 }
             default:
                 break;
@@ -573,7 +575,7 @@ public:
             // Setup pass through color
             varyingHandler->addPassThroughAttribute(qe.fInColor, args.fOutputColor);
 
-            GrGLSLPPFragmentBuilder* fragBuilder = args.fFragBuilder;
+            GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
 
             // Setup position
             this->writeOutputPosition(vertBuilder, gpArgs, qe.fInPosition->fName);
@@ -846,7 +848,6 @@ private:
 
         SkMatrix invert;
         if (fHelper.usesLocalCoords() && !fPaths.back().fViewMatrix.invert(&invert)) {
-            SkDebugf("Could not invert viewmatrix\n");
             return;
         }
 

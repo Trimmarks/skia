@@ -24,6 +24,10 @@
 
 #include <stdio.h>
 
+#ifndef GR_AA_TESSELLATOR_MAX_VERB_COUNT
+#define GR_AA_TESSELLATOR_MAX_VERB_COUNT 10
+#endif
+
 /*
  * This path renderer tessellates the path into triangles using GrTessellator, uploads the
  * triangles to a vertex buffer, and renders them with a single draw call. It can do screenspace
@@ -147,7 +151,7 @@ GrTessellatingPathRenderer::onCanDrawPath(const CanDrawPathArgs& args) const {
     if (GrAAType::kCoverage == args.fAAType) {
         SkPath path;
         args.fShape->asPath(&path);
-        if (path.countVerbs() > 10) {
+        if (path.countVerbs() > GR_AA_TESSELLATOR_MAX_VERB_COUNT) {
             return CanDrawPath::kNo;
         }
     } else if (!args.fShape->hasUnstyledKey()) {
@@ -241,7 +245,7 @@ private:
         static constexpr int kClipBoundsCnt = sizeof(fDevClipBounds) / sizeof(uint32_t);
         int shapeKeyDataCnt = fShape.unstyledKeySize();
         SkASSERT(shapeKeyDataCnt >= 0);
-        GrUniqueKey::Builder builder(&key, kDomain, shapeKeyDataCnt + kClipBoundsCnt);
+        GrUniqueKey::Builder builder(&key, kDomain, shapeKeyDataCnt + kClipBoundsCnt, "Path");
         fShape.writeUnstyledKey(&builder[0]);
         // For inverse fills, the tessellation is dependent on clip bounds.
         if (inverseFill) {

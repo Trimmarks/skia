@@ -25,6 +25,7 @@ typedef std::unordered_map<const Variable*, std::unique_ptr<Expression>*> Defini
  */
 struct Expression : public IRNode {
     enum Kind {
+        kAppendStage_Kind,
         kBinary_Kind,
         kBoolLiteral_Kind,
         kConstructor_Kind,
@@ -64,6 +65,22 @@ struct Expression : public IRNode {
      */
     virtual bool compareConstant(const Context& context, const Expression& other) const {
         ABORT("cannot call compareConstant on this type");
+    }
+
+    /**
+     * For an expression which evaluates to a constant int, returns the value. Otherwise calls
+     * ABORT.
+     */
+    virtual int64_t getConstantInt() const {
+        ABORT("not a constant int");
+    }
+
+    /**
+     * For an expression which evaluates to a constant float, returns the value. Otherwise calls
+     * ABORT.
+     */
+    virtual double getConstantFloat() const {
+        ABORT("not a constant float");
     }
 
     /**

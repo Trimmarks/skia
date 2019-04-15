@@ -36,8 +36,8 @@ sk_sp<SkFlattenable> SkMatrixImageFilter::CreateProc(SkReadBuffer& buffer) {
     SK_IMAGEFILTER_UNFLATTEN_COMMON(common, 1);
     SkMatrix matrix;
     buffer.readMatrix(&matrix);
-    SkFilterQuality quality = static_cast<SkFilterQuality>(buffer.readInt());
-    return Make(matrix, quality, common.getInput(0));
+
+    return Make(matrix, buffer.read32LE(kLast_SkFilterQuality), common.getInput(0));
 }
 
 void SkMatrixImageFilter::flatten(SkWriteBuffer& buffer) const {
@@ -114,12 +114,12 @@ SkRect SkMatrixImageFilter::computeFastBounds(const SkRect& src) const {
 }
 
 SkIRect SkMatrixImageFilter::onFilterNodeBounds(const SkIRect& src, const SkMatrix& ctm,
-                                                MapDirection direction) const {
+                                                MapDirection dir, const SkIRect* inputRect) const {
     SkMatrix matrix;
     if (!ctm.invert(&matrix)) {
         return src;
     }
-    if (kForward_MapDirection == direction) {
+    if (kForward_MapDirection == dir) {
         matrix.postConcat(fTransform);
     } else {
         SkMatrix transformInverse;
@@ -131,10 +131,19 @@ SkIRect SkMatrixImageFilter::onFilterNodeBounds(const SkIRect& src, const SkMatr
     matrix.postConcat(ctm);
     SkRect floatBounds;
     matrix.mapRect(&floatBounds, SkRect::Make(src));
-    return floatBounds.roundOut();
+    SkIRect result = floatBounds.roundOut();
+
+#ifndef SK_IGNORE_MATRIX_IMAGE_FILTER_FIX
+    if (kReverse_MapDirection == dir && kNone_SkFilterQuality != fFilterQuality) {
+        // When filtering we might need some pixels in the source that might be otherwise
+        // clipped off.
+        result.outset(1, 1);
+    }
+#endif
+
+    return result;
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkMatrixImageFilter::toString(SkString* str) const {
     str->appendf("SkMatrixImageFilter: (");
 
@@ -156,4 +165,3 @@ void SkMatrixImageFilter::toString(SkString* str) const {
 
     str->appendf(")");
 }
-#endif

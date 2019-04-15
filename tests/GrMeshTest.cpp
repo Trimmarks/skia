@@ -10,22 +10,24 @@
 
 #if SK_SUPPORT_GPU
 
+#include <array>
+#include <vector>
+#include "GrCaps.h"
 #include "GrContext.h"
+#include "GrContextPriv.h"
 #include "GrGeometryProcessor.h"
 #include "GrGpuCommandBuffer.h"
 #include "GrOpFlushState.h"
 #include "GrRenderTargetContext.h"
 #include "GrRenderTargetContextPriv.h"
-#include "GrResourceProvider.h"
 #include "GrResourceKey.h"
+#include "GrResourceProvider.h"
+#include "SkBitmap.h"
 #include "SkMakeUnique.h"
-#include "glsl/GrGLSLVertexGeoBuilder.h"
 #include "glsl/GrGLSLFragmentShaderBuilder.h"
 #include "glsl/GrGLSLGeometryProcessor.h"
 #include "glsl/GrGLSLVarying.h"
-#include <array>
-#include <vector>
-
+#include "glsl/GrGLSLVertexGeoBuilder.h"
 
 GR_DECLARE_STATIC_UNIQUE_KEY(gIndexBufferKey);
 
@@ -81,8 +83,8 @@ static void run_test(const char* testName, skiatest::Reporter*, const sk_sp<GrRe
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrMeshTest, reporter, ctxInfo) {
     GrContext* const context = ctxInfo.grContext();
 
-    sk_sp<GrRenderTargetContext> rtc(
-        context->makeDeferredRenderTargetContext(SkBackingFit::kExact, kImageWidth, kImageHeight,
+    sk_sp<GrRenderTargetContext> rtc(context->contextPriv().makeDeferredRenderTargetContext(
+                                                 SkBackingFit::kExact, kImageWidth, kImageHeight,
                                                  kRGBA_8888_GrPixelConfig, nullptr));
     if (!rtc) {
         ERRORF(reporter, "could not create render target context.");
@@ -196,7 +198,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrMeshTest, reporter, ctxInfo) {
     });
 
     for (bool indexed : {false, true}) {
-        if (!context->caps()->instanceAttribSupport()) {
+        if (!context->contextPriv().caps()->instanceAttribSupport()) {
             break;
         }
 
@@ -225,7 +227,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrMeshTest, reporter, ctxInfo) {
                 }
                 switch (y % 3) {
                     case 0:
-                        if (context->caps()->shaderCaps()->vertexIDSupport()) {
+                        if (context->contextPriv().caps()->shaderCaps()->vertexIDSupport()) {
                             if (y % 2) {
                                 // We don't need this call because it's the initial state of GrMesh.
                                 mesh.setVertexData(nullptr);
@@ -340,7 +342,7 @@ class GLSLMeshTestProcessor : public GrGLSLGeometryProcessor {
         }
         gpArgs->fPositionVar.set(kFloat2_GrSLType, "vertex");
 
-        GrGLSLPPFragmentBuilder* f = args.fFragBuilder;
+        GrGLSLFPFragmentBuilder* f = args.fFragBuilder;
         f->codeAppendf("%s = half4(1);", args.fOutputCoverage);
     }
 };

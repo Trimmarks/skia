@@ -16,12 +16,6 @@
 #include "SkPictureRecorder.h"
 #include "SkSerialProcs.h"
 
-#if defined(SK_DISALLOW_CROSSPROCESS_PICTUREIMAGEFILTERS)
-static bool g_AllPictureIOSecurityPrecautionsEnabled = true;
-#else
-static bool g_AllPictureIOSecurityPrecautionsEnabled = false;
-#endif
-
 // When we read/write the SkPictInfo via a stream, we have a sentinel byte right after the info.
 // Note: in the read/write buffer versions, we have a slightly different convention:
 //      We have a sentinel int32_t:
@@ -86,24 +80,25 @@ bool SkPicture::StreamIsSKP(SkStream* stream, SkPictInfo* pInfo) {
 
     SkPictInfo info;
     SkASSERT(sizeof(kMagic) == sizeof(info.fMagic));
-    if (!stream->read(&info.fMagic, sizeof(kMagic))) {
+    if (stream->read(&info.fMagic, sizeof(kMagic)) != sizeof(kMagic)) {
         return false;
     }
 
-    info.setVersion(         stream->readU32());
-    info.fCullRect.fLeft   = stream->readScalar();
-    info.fCullRect.fTop    = stream->readScalar();
-    info.fCullRect.fRight  = stream->readScalar();
-    info.fCullRect.fBottom = stream->readScalar();
+    uint32_t version;
+    if (!stream->readU32(&version)) { return false; }
+    info.setVersion(version);
+    if (!stream->readScalar(&info.fCullRect.fLeft  )) { return false; }
+    if (!stream->readScalar(&info.fCullRect.fTop   )) { return false; }
+    if (!stream->readScalar(&info.fCullRect.fRight )) { return false; }
+    if (!stream->readScalar(&info.fCullRect.fBottom)) { return false; }
     if (info.getVersion() < SkReadBuffer::kRemoveHeaderFlags_Version) {
-        (void)stream->readU32();    // used to be flags
+        if (!stream->readU32(nullptr)) { return false; }
     }
 
-    if (IsValidPictInfo(info)) {
-        if (pInfo) { *pInfo = info; }
-        return true;
-    }
-    return false;
+    if (!IsValidPictInfo(info)) { return false; }
+
+    if (pInfo) { *pInfo = info; }
+    return true;
 }
 bool SkPicture_StreamIsSKP(SkStream* stream, SkPictInfo* pInfo) {
     return SkPicture::StreamIsSKP(stream, pInfo);
@@ -177,15 +172,17 @@ sk_sp<SkPicture> SkPicture::MakeFromStream(SkStream* stream, const SkDeserialPro
         procs = *procsPtr;
     }
 
-    switch (stream->readU8()) {
+    uint8_t trailingStreamByteAfterPictInfo;
+    if (!stream->readU8(&trailingStreamByteAfterPictInfo)) { return nullptr; }
+    switch (trailingStreamByteAfterPictInfo) {
         case kPictureData_TrailingStreamByteAfterPictInfo: {
             std::unique_ptr<SkPictureData> data(
                     SkPictureData::CreateFromStream(stream, info, procs, typefaces));
             return Forwardport(info, data.get(), nullptr);
         }
         case kCustom_TrailingStreamByteAfterPictInfo: {
-            int32_t ssize = stream->readS32();
-            if (ssize >= 0 || !procs.fPictureProc) {
+            int32_t ssize;
+            if (!stream->readS32(&ssize) || ssize >= 0 || !procs.fPictureProc) {
                 return nullptr;
             }
             size_t size = sk_negate_to_size_t(ssize);
@@ -248,7 +245,7 @@ static sk_sp<SkData> custom_serialize(const SkPicture* picture, const SkSerialPr
         auto data = procs.fPictureProc(const_cast<SkPicture*>(picture), procs.fPictureCtx);
         if (data) {
             size_t size = data->size();
-            if (!sk_64_isS32(size) || size <= 1) {
+            if (!SkTFitsIn<int32_t>(size) || size <= 1) {
                 return SkData::MakeEmpty();
             }
             return data;
@@ -322,7 +319,19 @@ void SkPicture::flatten(SkWriteBuffer& buffer) const {
     }
 }
 
-// Global setting to disable security precautions for serialization.
-bool SkPicture::PictureIOSecurityPrecautionsEnabled() {
-    return g_AllPictureIOSecurityPrecautionsEnabled;
+sk_sp<SkPicture> SkPicture::MakePlaceholder(SkRect cull) {
+    struct Placeholder : public SkPicture {
+          explicit Placeholder(SkRect cull) : fCull(cull) {}
+
+          void playback(SkCanvas*, AbortCallback*) const override { }
+
+          // approximateOpCount() needs to be greater than kMaxPictureOpsToUnrollInsteadOfRef
+          // in SkCanvas.cpp to avoid that unrolling.  SK_MaxS32 can't not be big enough!
+          int    approximateOpCount()   const override { return SK_MaxS32; }
+          size_t approximateBytesUsed() const override { return sizeof(*this); }
+          SkRect cullRect()             const override { return fCull; }
+
+          SkRect fCull;
+    };
+    return sk_make_sp<Placeholder>(cull);
 }

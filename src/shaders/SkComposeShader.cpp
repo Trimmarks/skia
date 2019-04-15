@@ -119,7 +119,7 @@ bool SkComposeShader::onAppendStages(const StageRec& rec) const {
 /////////////////////////////////////////////////////////////////////
 
 std::unique_ptr<GrFragmentProcessor> SkComposeShader::asFragmentProcessor(
-        const AsFPArgs& args) const {
+        const GrFPArgs& args) const {
     if (this->isJustMode()) {
         SkASSERT(fMode != SkBlendMode::kSrc && fMode != SkBlendMode::kDst); // caught in factory
         if (fMode == SkBlendMode::kClear) {
@@ -142,7 +142,6 @@ std::unique_ptr<GrFragmentProcessor> SkComposeShader::asFragmentProcessor(
 }
 #endif
 
-#ifndef SK_IGNORE_TO_STRING
 void SkComposeShader::toString(SkString* str) const {
     str->append("SkComposeShader: (");
 
@@ -157,4 +156,3 @@ void SkComposeShader::toString(SkString* str) const {
 
     str->append(")");
 }
-#endif

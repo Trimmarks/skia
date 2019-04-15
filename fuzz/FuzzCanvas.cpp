@@ -55,7 +55,6 @@
 #include "SkPerlinNoiseShader.h"
 #include "SkPictureImageFilter.h"
 #include "SkReadBuffer.h"
-#include "SkRRectsGaussianEdgeMaskFilter.h"
 #include "SkTableColorFilter.h"
 #include "SkTextBlob.h"
 #include "SkTileImageFilter.h"
@@ -75,12 +74,6 @@
 // TODO:
 //   SkTextBlob with Unicode
 //   SkImage: more types
-
-template <typename T, typename Min, typename Max>
-inline void fuzz_enum_range(Fuzz* fuzz, T* value, Min rmin, Max rmax) {
-    using U = skstd::underlying_type_t<T>;
-    fuzz->nextRange((U*)value, (U)rmin, (U)rmax);
-}
 
 // be careful: `foo(make_fuzz_t<T>(f), make_fuzz_t<U>(f))` is undefined.
 // In fact, all make_fuzz_foo() functions have this potential problem.
@@ -183,8 +176,12 @@ static sk_sp<SkColorFilter> make_fuzz_colorfilter(Fuzz* fuzz, int depth) {
         }
         case 2: {
             sk_sp<SkColorFilter> outer = make_fuzz_colorfilter(fuzz, depth - 1);
+            if (!outer) {
+                return nullptr;
+            }
             sk_sp<SkColorFilter> inner = make_fuzz_colorfilter(fuzz, depth - 1);
-            return SkColorFilter::MakeComposeFilter(std::move(outer), std::move(inner));
+            // makeComposed should be able to handle nullptr.
+            return outer->makeComposed(std::move(inner));
         }
         case 3: {
             SkScalar array[20];
@@ -443,7 +440,7 @@ static sk_sp<SkPathEffect> make_fuzz_patheffect(Fuzz* fuzz, int depth) {
         }
         case 3: {
             SkPath path;
-            fuzz_path(fuzz, &path, 20);
+            FuzzPath(fuzz, &path, 20);
             SkScalar advance, phase;
             fuzz->next(&advance, &phase);
             SkPath1DPathEffect::Style style;
@@ -458,7 +455,7 @@ static sk_sp<SkPathEffect> make_fuzz_patheffect(Fuzz* fuzz, int depth) {
         }
         case 5: {
             SkPath path;
-            fuzz_path(fuzz, &path, 20);
+            FuzzPath(fuzz, &path, 20);
             SkMatrix matrix;
             fuzz->next(&matrix);
             return SkPath2DPathEffect::Make(matrix, path);
@@ -491,7 +488,7 @@ static sk_sp<SkPathEffect> make_fuzz_patheffect(Fuzz* fuzz, int depth) {
 
 static sk_sp<SkMaskFilter> make_fuzz_maskfilter(Fuzz* fuzz) {
     int maskfilterType;
-    fuzz->nextRange(&maskfilterType, 0, 2);
+    fuzz->nextRange(&maskfilterType, 0, 1);
     switch (maskfilterType) {
         case 0:
             return nullptr;
@@ -505,14 +502,9 @@ static sk_sp<SkMaskFilter> make_fuzz_maskfilter(Fuzz* fuzz) {
                 fuzz->next(&occluder);
             }
             uint32_t flags;
-            fuzz->nextRange(&flags, 0, 3);
-            return SkBlurMaskFilter::Make(blurStyle, sigma, occluder, flags);
-        }
-        case 2: {
-            SkRRect first, second;
-            SkScalar radius;
-            fuzz->next(&first, &second, &radius);
-            return SkRRectsGaussianEdgeMaskFilter::Make(first, second, radius);
+            fuzz->nextRange(&flags, 0, 1);
+            bool respectCTM = flags != 0;
+            return SkMaskFilter::MakeBlur(blurStyle, sigma, occluder, respectCTM);
         }
         default:
             SkASSERT(false);
@@ -897,7 +889,10 @@ static SkBitmap make_fuzz_bitmap(Fuzz* fuzz) {
     int w, h;
     fuzz->nextRange(&w, 1, 1024);
     fuzz->nextRange(&h, 1, 1024);
-    bitmap.allocN32Pixels(w, h);
+    if (!bitmap.tryAllocN32Pixels(w, h)) {
+        SkDEBUGF(("Could not allocate pixels %d x %d", w, h));
+        return bitmap;
+    }
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             SkColor c;
@@ -969,6 +964,11 @@ static SkTDArray<uint8_t> make_fuzz_text(Fuzz* fuzz, const SkPaint& paint) {
     if (SkPaint::kGlyphID_TextEncoding == paint.getTextEncoding()) {
         int glyphRange = paint.getTypeface() ? paint.getTypeface()->countGlyphs()
                                              : SkTypeface::MakeDefault()->countGlyphs();
+        if (glyphRange == 0) {
+            // Some fuzzing environments have no fonts, so empty array is the best
+            // we can do.
+            return array;
+        }
         int glyphCount;
         fuzz->nextRange(&glyphCount, 1, kMaxGlyphCount);
         SkGlyphID* glyphs = (SkGlyphID*)array.append(glyphCount * sizeof(SkGlyphID));
@@ -1150,9 +1150,6 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 }
                 // _DumpCanvas can't handle this.
                 // if (make_fuzz_t<bool>(fuzz)) {
-                //     saveLayerRec.fSaveLayerFlags |= SkCanvas::kIsOpaque_SaveLayerFlag;
-                // }
-                // if (make_fuzz_t<bool>(fuzz)) {
                 //     saveLayerRec.fSaveLayerFlags |= SkCanvas::kPreserveLCDText_SaveLayerFlag;
                 // }
 
@@ -1235,7 +1232,7 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
             }
             case 21: {
                 SkPath path;
-                fuzz_path(fuzz, &path, 30);
+                FuzzPath(fuzz, &path, 30);
                 int op;
                 bool doAntiAlias;
                 fuzz->next(&doAntiAlias);
@@ -1272,6 +1269,9 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 fuzz_paint(fuzz, &paint, depth - 1);
                 SkRect r;
                 fuzz->next(&r);
+                if (!r.isFinite()) {
+                    break;
+                }
                 canvas->drawRect(r, paint);
                 break;
             }
@@ -1286,9 +1286,13 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 fuzz_paint(fuzz, &paint, depth - 1);
                 SkRect r;
                 fuzz->next(&r);
+                if (!r.isFinite()) {
+                    break;
+                }
                 canvas->drawOval(r, paint);
                 break;
             }
+            case 28: break; // must have deleted this some time earlier
             case 29: {
                 fuzz_paint(fuzz, &paint, depth - 1);
                 SkRRect rr;
@@ -1316,8 +1320,9 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 break;
             }
             case 32: {
+                fuzz_paint(fuzz, &paint, depth - 1);
                 SkPath path;
-                fuzz_path(fuzz, &path, 60);
+                FuzzPath(fuzz, &path, 60);
                 canvas->drawPath(path, paint);
                 break;
             }
@@ -1462,6 +1467,10 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 if (make_fuzz_t<bool>(fuzz)) {
                     fuzz->next(&center);
                 } else {  // Make valid center, see SkLatticeIter::Valid().
+                    if (img.width() == 0 || img.height() == 0) {
+                        // bitmap may not have had its pixels initialized.
+                        break;
+                    }
                     fuzz->nextRange(&center.fLeft, 0, img.width() - 1);
                     fuzz->nextRange(&center.fTop, 0, img.height() - 1);
                     fuzz->nextRange(&center.fRight, center.fLeft + 1, img.width());
@@ -1569,7 +1578,7 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 fuzz_paint_text_encoding(fuzz, &paint);
                 SkTDArray<uint8_t> text = make_fuzz_text(fuzz, paint);
                 SkPath path;
-                fuzz_path(fuzz, &path, 20);
+                FuzzPath(fuzz, &path, 20);
                 SkScalar hOffset, vOffset;
                 fuzz->next(&hOffset, &vOffset);
                 canvas->drawTextOnPathHV(text.begin(), SkToSizeT(text.count()), path, hOffset,
@@ -1587,7 +1596,7 @@ static void fuzz_canvas(Fuzz* fuzz, SkCanvas* canvas, int depth = 9) {
                 fuzz_paint_text_encoding(fuzz, &paint);
                 SkTDArray<uint8_t> text = make_fuzz_text(fuzz, paint);
                 SkPath path;
-                fuzz_path(fuzz, &path, 20);
+                FuzzPath(fuzz, &path, 20);
                 canvas->drawTextOnPath(text.begin(), SkToSizeT(text.count()), path,
                                        useMatrix ? &matrix : nullptr, paint);
                 break;
@@ -1688,12 +1697,11 @@ DEF_FUZZ(NullCanvas, fuzz) {
     fuzz_canvas(fuzz, SkMakeNullCanvas().get());
 }
 
-// 8.5x11 letter paper at 72ppi.
-constexpr SkISize kCanvasSize = {612, 792};
+constexpr SkISize kCanvasSize = {128, 160};
 
 DEF_FUZZ(RasterN32Canvas, fuzz) {
     auto surface = SkSurface::MakeRasterN32Premul(kCanvasSize.width(), kCanvasSize.height());
-    SkASSERT(surface && surface->getCanvas());
+    if (!surface || !surface->getCanvas()) { fuzz->signalBug(); }
     fuzz_canvas(fuzz, surface->getCanvas());
 }
 
@@ -1799,14 +1807,23 @@ DEF_FUZZ(NativeGLCanvas, fuzz) {
     fuzz_ganesh(fuzz, context);
 }
 
+// This target is deprecated, NullGLContext is not well maintained.
+// Please use MockGPUCanvas instead.
 DEF_FUZZ(NullGLCanvas, fuzz) {
     sk_gpu_test::GrContextFactory f;
     fuzz_ganesh(fuzz, f.get(sk_gpu_test::GrContextFactory::kNullGL_ContextType));
 }
 
+// This target is deprecated, DebugGLContext is not well maintained.
+// Please use MockGPUCanvas instead.
 DEF_FUZZ(DebugGLCanvas, fuzz) {
     sk_gpu_test::GrContextFactory f;
     fuzz_ganesh(fuzz, f.get(sk_gpu_test::GrContextFactory::kDebugGL_ContextType));
+}
+
+DEF_FUZZ(MockGPUCanvas, fuzz) {
+    sk_gpu_test::GrContextFactory f;
+    fuzz_ganesh(fuzz, f.get(sk_gpu_test::GrContextFactory::kMock_ContextType));
 }
 #endif
 

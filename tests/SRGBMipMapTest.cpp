@@ -80,7 +80,7 @@ void read_and_check_pixels(skiatest::Reporter* reporter, GrSurfaceContext* conte
 
 DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(SRGBMipMaps, reporter, ctxInfo) {
     GrContext* context = ctxInfo.grContext();
-    if (!context->caps()->srgbSupport()) {
+    if (!context->contextPriv().caps()->srgbSupport()) {
         return;
     }
 
@@ -126,21 +126,24 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(SRGBMipMaps, reporter, ctxInfo) {
     // Create our test texture
     GrSurfaceDesc desc;
     desc.fFlags = kNone_GrSurfaceFlags;
-    desc.fOrigin = kTopLeft_GrSurfaceOrigin;
     desc.fWidth = texS;
     desc.fHeight = texS;
     desc.fConfig = kSRGBA_8888_GrPixelConfig;
 
     GrProxyProvider* proxyProvider = context->contextPriv().proxyProvider();
-    sk_sp<GrTextureProxy> proxy = proxyProvider->createTextureProxy(
-                                                                desc, SkBudgeted::kNo, texData, 0);
+    sk_sp<GrTextureProxy> proxy =
+            proxyProvider->createTextureProxy(desc, SkBudgeted::kNo, texData, 0);
 
     // Create two render target contexts (L32 and S32)
     sk_sp<SkColorSpace> srgbColorSpace = SkColorSpace::MakeSRGB();
-    sk_sp<GrRenderTargetContext> l32RenderTargetContext = context->makeDeferredRenderTargetContext(
-        SkBackingFit::kExact, rtS, rtS, kRGBA_8888_GrPixelConfig, nullptr);
-    sk_sp<GrRenderTargetContext> s32RenderTargetContext = context->makeDeferredRenderTargetContext(
-        SkBackingFit::kExact, rtS, rtS, kSRGBA_8888_GrPixelConfig, std::move(srgbColorSpace));
+    sk_sp<GrRenderTargetContext> l32RenderTargetContext =
+            context->contextPriv().makeDeferredRenderTargetContext(
+                                        SkBackingFit::kExact, rtS, rtS,
+                                        kRGBA_8888_GrPixelConfig, nullptr);
+    sk_sp<GrRenderTargetContext> s32RenderTargetContext =
+            context->contextPriv().makeDeferredRenderTargetContext(
+                                        SkBackingFit::kExact, rtS, rtS,
+                                        kSRGBA_8888_GrPixelConfig, std::move(srgbColorSpace));
 
     SkRect rect = SkRect::MakeWH(SkIntToScalar(rtS), SkIntToScalar(rtS));
     GrNoClip noClip;
@@ -169,7 +172,7 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(SRGBMipMaps, reporter, ctxInfo) {
     //
     // TODO: Once Vulkan supports legacy mip-mapping, we can promote this to GrCaps. Right now,
     // Vulkan has most of the functionality, but not the mip-mapping part that's being tested here.
-    GrGLGpu* glGpu = static_cast<GrGLGpu*>(context->getGpu());
+    GrGLGpu* glGpu = static_cast<GrGLGpu*>(context->contextPriv().getGpu());
     if (glGpu->glCaps().srgbDecodeDisableSupport() &&
         glGpu->glCaps().srgbDecodeDisableAffectsMipmaps()) {
         read_and_check_pixels(reporter, l32RenderTargetContext.get(), expectedLinear, iiRGBA,

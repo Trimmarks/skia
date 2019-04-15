@@ -15,7 +15,7 @@
 #include "GrTextureMaker.h"
 #include "SkDraw.h"
 #include "SkGr.h"
-#include "SkMaskFilter.h"
+#include "SkMaskFilterBase.h"
 #include "effects/GrBicubicEffect.h"
 #include "effects/GrSimpleTextureEffect.h"
 #include "effects/GrTextureDomain.h"
@@ -88,27 +88,20 @@ static bool can_ignore_bilerp_constraint(const GrTextureProducer& producer,
 
 /**
  * Checks whether the paint, matrix, and constraint are compatible with using
- * GrRenderTargetContext::drawTextureAffine. It is more effecient than the GrTextureProducer
+ * GrRenderTargetContext::drawTexture. It is more efficient than the GrTextureProducer
  * general case.
  */
-static bool can_use_draw_texture_affine(const SkPaint& paint, GrAA aa, const SkMatrix& ctm,
-                                        SkCanvas::SrcRectConstraint constraint) {
-// This is disabled in Chrome until crbug.com/802408 and crbug.com/801783 can be sorted out.
-#ifdef SK_DISABLE_TEXTURE_OP_AA
-    if (GrAA::kYes == aa) {
-        return false;
-    }
-#endif
+static bool can_use_draw_texture(const SkPaint& paint, GrAA aa, const SkMatrix& ctm,
+                                 SkCanvas::SrcRectConstraint constraint) {
     return (!paint.getColorFilter() && !paint.getShader() && !paint.getMaskFilter() &&
             !paint.getImageFilter() && paint.getFilterQuality() < kMedium_SkFilterQuality &&
-            paint.getBlendMode() == SkBlendMode::kSrcOver && !ctm.hasPerspective() &&
+            paint.getBlendMode() == SkBlendMode::kSrcOver &&
             SkCanvas::kFast_SrcRectConstraint == constraint);
 }
 
-static void draw_texture_affine(const SkPaint& paint, const SkMatrix& ctm, const SkRect* src,
-                                const SkRect* dst, GrAA aa, sk_sp<GrTextureProxy> proxy,
-                                SkColorSpace* colorSpace, const GrClip& clip,
-                                GrRenderTargetContext* rtc) {
+static void draw_texture(const SkPaint& paint, const SkMatrix& ctm, const SkRect* src,
+                         const SkRect* dst, GrAA aa, sk_sp<GrTextureProxy> proxy,
+                         SkColorSpace* colorSpace, const GrClip& clip, GrRenderTargetContext* rtc) {
     SkASSERT(!(SkToBool(src) && !SkToBool(dst)));
     SkRect srcRect = src ? *src : SkRect::MakeWH(proxy->width(), proxy->height());
     SkRect dstRect = dst ? *dst : srcRect;
@@ -136,8 +129,8 @@ static void draw_texture_affine(const SkPaint& paint, const SkMatrix& ctm, const
     GrColor color = GrPixelConfigIsAlphaOnly(proxy->config())
                             ? SkColorToPremulGrColor(paint.getColor())
                             : SkColorAlphaToGrColor(paint.getColor());
-    rtc->drawTextureAffine(clip, std::move(proxy), filter, color, srcRect, dstRect, aa, ctm,
-                           std::move(csxf));
+    rtc->drawTexture(clip, std::move(proxy), filter, color, srcRect, dstRect, aa, ctm,
+                     std::move(csxf));
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -148,9 +141,9 @@ void SkGpuDevice::drawPinnedTextureProxy(sk_sp<GrTextureProxy> proxy, uint32_t p
                                          SkCanvas::SrcRectConstraint constraint,
                                          const SkMatrix& viewMatrix, const SkPaint& paint) {
     GrAA aa = GrAA(paint.isAntiAlias());
-    if (can_use_draw_texture_affine(paint, aa, this->ctm(), constraint)) {
-        draw_texture_affine(paint, viewMatrix, srcRect, dstRect, aa, std::move(proxy), colorSpace,
-                            this->clip(), fRenderTargetContext.get());
+    if (can_use_draw_texture(paint, aa, this->ctm(), constraint)) {
+        draw_texture(paint, viewMatrix, srcRect, dstRect, aa, std::move(proxy), colorSpace,
+                     this->clip(), fRenderTargetContext.get());
         return;
     }
     GrTextureAdjuster adjuster(this->context(), std::move(proxy), alphaType, pinnedUniqueID,
@@ -163,7 +156,7 @@ void SkGpuDevice::drawTextureMaker(GrTextureMaker* maker, int imageW, int imageH
                                    SkCanvas::SrcRectConstraint constraint,
                                    const SkMatrix& viewMatrix, const SkPaint& paint) {
     GrAA aa = GrAA(paint.isAntiAlias());
-    if (can_use_draw_texture_affine(paint, aa, viewMatrix, constraint)) {
+    if (can_use_draw_texture(paint, aa, viewMatrix, constraint)) {
         sk_sp<SkColorSpace> cs;
         // We've done enough checks above to allow us to pass ClampNearest() and not check for
         // scaling adjustments.
@@ -173,8 +166,8 @@ void SkGpuDevice::drawTextureMaker(GrTextureMaker* maker, int imageW, int imageH
         if (!proxy) {
             return;
         }
-        draw_texture_affine(paint, viewMatrix, srcRect, dstRect, aa, std::move(proxy), cs.get(),
-                            this->clip(), fRenderTargetContext.get());
+        draw_texture(paint, viewMatrix, srcRect, dstRect, aa, std::move(proxy), cs.get(),
+                     this->clip(), fRenderTargetContext.get());
         return;
     }
     this->drawTextureProducer(maker, srcRect, dstRect, constraint, viewMatrix, paint);
@@ -248,6 +241,9 @@ void SkGpuDevice::drawTextureProducerImpl(GrTextureProducer* producer,
     // FP. In the future this should be an opaque optimization enabled by the combination of
     // GrDrawOp/GP and FP.
     const SkMaskFilter* mf = paint.getMaskFilter();
+    if (mf && as_MFB(mf)->hasFragmentProcessor()) {
+        mf = nullptr;
+    }
     // The shader expects proper local coords, so we can't replace local coords with texture coords
     // if the shader will be used. If we have a mask filter we will change the underlying geometry
     // that is rendered.
@@ -255,7 +251,8 @@ void SkGpuDevice::drawTextureProducerImpl(GrTextureProducer* producer,
 
     bool doBicubic;
     GrSamplerState::Filter fm = GrSkFilterQualityToGrFilterMode(
-            paint.getFilterQuality(), viewMatrix, srcToDstMatrix, &doBicubic);
+            paint.getFilterQuality(), viewMatrix, srcToDstMatrix,
+            fContext->contextPriv().sharpenMipmappedTextures(), &doBicubic);
     const GrSamplerState::Filter* filterMode = doBicubic ? nullptr : &fm;
 
     GrTextureProducer::FilterConstraint constraintMode;
@@ -323,14 +320,14 @@ void SkGpuDevice::drawTextureProducerImpl(GrTextureProducer* producer,
         viewMatrix.mapRectScaleTranslate(&devClippedDstRect, clippedDstRect);
 
         SkStrokeRec rec(SkStrokeRec::kFill_InitStyle);
-        if (mf->directFilterRRectMaskGPU(fContext.get(),
-                                         fRenderTargetContext.get(),
-                                         std::move(grPaint),
-                                         this->clip(),
-                                         viewMatrix,
-                                         rec,
-                                         SkRRect::MakeRect(clippedDstRect),
-                                         SkRRect::MakeRect(devClippedDstRect))) {
+        if (as_MFB(mf)->directFilterRRectMaskGPU(fContext.get(),
+                                                 fRenderTargetContext.get(),
+                                                 std::move(grPaint),
+                                                 this->clip(),
+                                                 viewMatrix,
+                                                 rec,
+                                                 SkRRect::MakeRect(clippedDstRect),
+                                                 SkRRect::MakeRect(devClippedDstRect))) {
             return;
         }
     }

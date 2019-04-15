@@ -257,15 +257,6 @@ void GrGLSLProgramBuilder::emitSamplers(
         const GrResourceIOProcessor::TextureSampler& sampler = processor.textureSampler(t);
         name.printf("TextureSampler_%d", outTexSamplerHandles->count());
         GrSLType samplerType = sampler.peekTexture()->texturePriv().samplerType();
-        if (kTextureExternalSampler_GrSLType == samplerType) {
-            const char* externalFeatureString =
-                    this->shaderCaps()->externalTextureExtensionString();
-            // We shouldn't ever create a GrGLTexture that requires external sampler type
-            SkASSERT(externalFeatureString);
-            this->addFeature(sampler.visibility(),
-                             1 << GrGLSLShaderBuilder::kExternalTexture_GLSLPrivateFeature,
-                             externalFeatureString);
-        }
         outTexSamplerHandles->emplace_back(this->emitSampler(
                 samplerType, sampler.peekTexture()->config(), name.c_str(), sampler.visibility()));
     }
@@ -360,16 +351,13 @@ bool GrGLSLProgramBuilder::checkSamplerCounts() {
 
 #ifdef SK_DEBUG
 void GrGLSLProgramBuilder::verify(const GrPrimitiveProcessor& gp) {
-    SkASSERT(fFS.usedProcessorFeatures() == gp.requiredFeatures());
 }
 
 void GrGLSLProgramBuilder::verify(const GrXferProcessor& xp) {
-    SkASSERT(fFS.usedProcessorFeatures() == xp.requiredFeatures());
     SkASSERT(fFS.hasReadDstColor() == xp.willReadDstColor());
 }
 
 void GrGLSLProgramBuilder::verify(const GrFragmentProcessor& fp) {
-    SkASSERT(fFS.usedProcessorFeatures() == fp.requiredFeatures());
 }
 #endif
 

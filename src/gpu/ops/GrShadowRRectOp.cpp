@@ -8,7 +8,7 @@
 #include "GrShadowRRectOp.h"
 #include "GrDrawOpTest.h"
 #include "GrOpFlushState.h"
-#include "SkRRect.h"
+#include "SkRRectPriv.h"
 #include "effects/GrShadowGeoProc.h"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -460,11 +460,19 @@ private:
         // we also skew the vectors we send to the shader that help define the circle.
         // By doing so, we end up with a quarter circle in the corner rather than the
         // elliptical curve.
-        SkVector outerVec = SkVector::Make(0.5f*(outerRadius - umbraInset), -umbraInset);
+
+        // This is a bit magical, but it gives us the correct results at extrema:
+        //   a) umbraInset == outerRadius produces an orthogonal vector
+        //   b) outerRadius == 0 produces a diagonal vector
+        // And visually the corner looks correct.
+        SkVector outerVec = SkVector::Make(outerRadius - umbraInset, -outerRadius - umbraInset);
         outerVec.normalize();
-        SkVector diagVec = SkVector::Make(outerVec.fX + outerVec.fY,
-                                          outerVec.fX + outerVec.fY);
-        diagVec *= umbraInset / (2 * umbraInset - outerRadius);
+        // We want the circle edge to fall fractionally along the diagonal at
+        //      (sqrt(2)*(umbraInset - outerRadius) + outerRadius)/sqrt(2)*umbraInset
+        //
+        // Setting the components of the diagonal offset to the following value will give us that.
+        SkScalar diagVal = umbraInset / (SK_ScalarSqrt2*(outerRadius - umbraInset) - outerRadius);
+        SkVector diagVec = SkVector::Make(diagVal, diagVal);
         SkScalar distanceCorrection = umbraInset / blurRadius;
         SkScalar clampValue = args.fClampValue;
 
@@ -651,8 +659,7 @@ std::unique_ptr<GrDrawOp> Make(GrColor color,
                                SkScalar insetWidth,
                                SkScalar blurClamp) {
     // Shadow rrect ops only handle simple circular rrects.
-    SkASSERT(viewMatrix.isSimilarity() &&
-             (rrect.isSimpleCircular() || rrect.isRect() || rrect.isCircle()));
+    SkASSERT(viewMatrix.isSimilarity() && SkRRectPriv::EqualRadii(rrect));
 
     // Do any matrix crunching before we reset the draw state for device coords.
     const SkRect& rrectBounds = rrect.getBounds();
@@ -660,7 +667,7 @@ std::unique_ptr<GrDrawOp> Make(GrColor color,
     viewMatrix.mapRect(&bounds, rrectBounds);
 
     // Map radius and inset. As the matrix is a similarity matrix, this should be isotropic.
-    SkScalar radius = rrect.getSimpleRadii().fX;
+    SkScalar radius = SkRRectPriv::GetSimpleRadii(rrect).fX;
     SkScalar matrixFactor = viewMatrix[SkMatrix::kMScaleX] + viewMatrix[SkMatrix::kMSkewX];
     SkScalar scaledRadius = SkScalarAbs(radius*matrixFactor);
     SkScalar scaledInsetWidth = SkScalarAbs(insetWidth*matrixFactor);
@@ -703,7 +710,7 @@ GR_DRAW_OP_TEST_DEFINE(ShadowRRectOp) {
         do {
             // This may return a rrect with elliptical corners, which we don't support.
             rrect = GrTest::TestRRectSimple(random);
-        } while (!rrect.isSimpleCircular());
+        } while (!SkRRectPriv::IsSimpleCircular(rrect));
         return GrShadowRRectOp::Make(color, viewMatrix, rrect, blurWidth, insetWidth, blurClamp);
     }
 }

@@ -150,17 +150,20 @@ static sk_sp<GrRenderTargetContext> random_render_target_context(GrContext* cont
                                                                  const GrCaps* caps) {
     GrSurfaceOrigin origin = random->nextBool() ? kTopLeft_GrSurfaceOrigin
                                                 : kBottomLeft_GrSurfaceOrigin;
-    int sampleCnt = random->nextBool() ? caps->getSampleCount(4, kRGBA_8888_GrPixelConfig) : 0;
+    int sampleCnt =
+            random->nextBool() ? caps->getRenderTargetSampleCount(2, kRGBA_8888_GrPixelConfig) : 1;
+    // Above could be 0 if msaa isn't supported.
+    sampleCnt = SkTMax(1, sampleCnt);
 
-    sk_sp<GrRenderTargetContext> renderTargetContext(context->makeDeferredRenderTargetContext(
-                                                                           SkBackingFit::kExact,
-                                                                           kRenderTargetWidth,
-                                                                           kRenderTargetHeight,
-                                                                           kRGBA_8888_GrPixelConfig,
-                                                                           nullptr,
-                                                                           sampleCnt,
-                                                                           GrMipMapped::kNo,
-                                                                           origin));
+    sk_sp<GrRenderTargetContext> renderTargetContext(
+        context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kExact,
+                                                               kRenderTargetWidth,
+                                                               kRenderTargetHeight,
+                                                               kRGBA_8888_GrPixelConfig,
+                                                               nullptr,
+                                                               sampleCnt,
+                                                               GrMipMapped::kNo,
+                                                               origin));
     return renderTargetContext;
 }
 
@@ -269,20 +272,20 @@ bool GrDrawingManager::ProgramUnitTest(GrContext* context, int maxStages, int ma
     {
         GrSurfaceDesc dummyDesc;
         dummyDesc.fFlags = kRenderTarget_GrSurfaceFlag;
-        dummyDesc.fOrigin = kBottomLeft_GrSurfaceOrigin;
         dummyDesc.fWidth = 34;
         dummyDesc.fHeight = 18;
         dummyDesc.fConfig = kRGBA_8888_GrPixelConfig;
-        proxies[0] = proxyProvider->createProxy(dummyDesc, SkBackingFit::kExact, SkBudgeted::kNo);
+        proxies[0] = proxyProvider->createProxy(dummyDesc, kBottomLeft_GrSurfaceOrigin,
+                                                SkBackingFit::kExact, SkBudgeted::kNo);
     }
     {
         GrSurfaceDesc dummyDesc;
         dummyDesc.fFlags = kNone_GrSurfaceFlags;
-        dummyDesc.fOrigin = kTopLeft_GrSurfaceOrigin;
         dummyDesc.fWidth = 16;
         dummyDesc.fHeight = 22;
         dummyDesc.fConfig = kAlpha_8_GrPixelConfig;
-        proxies[1] = proxyProvider->createProxy(dummyDesc, SkBackingFit::kExact, SkBudgeted::kNo);
+        proxies[1] = proxyProvider->createProxy(dummyDesc, kTopLeft_GrSurfaceOrigin,
+                                                SkBackingFit::kExact, SkBudgeted::kNo);
     }
 
     if (!proxies[0] || !proxies[1]) {
@@ -297,8 +300,8 @@ bool GrDrawingManager::ProgramUnitTest(GrContext* context, int maxStages, int ma
     static const int NUM_TESTS = 1024;
     for (int t = 0; t < NUM_TESTS; t++) {
         // setup random render target(can fail)
-        sk_sp<GrRenderTargetContext> renderTargetContext(random_render_target_context(
-            context, &random, context->caps()));
+        sk_sp<GrRenderTargetContext> renderTargetContext(
+                random_render_target_context(context, &random, context->contextPriv().caps()));
         if (!renderTargetContext) {
             SkDebugf("Could not allocate renderTargetContext");
             return false;
@@ -315,12 +318,12 @@ bool GrDrawingManager::ProgramUnitTest(GrContext* context, int maxStages, int ma
     drawingManager->flush(nullptr);
 
     // Validate that GrFPs work correctly without an input.
-    sk_sp<GrRenderTargetContext> renderTargetContext(context->makeDeferredRenderTargetContext(
-                                                                           SkBackingFit::kExact,
-                                                                           kRenderTargetWidth,
-                                                                           kRenderTargetHeight,
-                                                                           kRGBA_8888_GrPixelConfig,
-                                                                           nullptr));
+    sk_sp<GrRenderTargetContext> renderTargetContext(
+                 context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kExact,
+                                                                        kRenderTargetWidth,
+                                                                        kRenderTargetHeight,
+                                                                        kRGBA_8888_GrPixelConfig,
+                                                                        nullptr));
     if (!renderTargetContext) {
         SkDebugf("Could not allocate a renderTargetContext");
         return false;
@@ -348,7 +351,7 @@ bool GrDrawingManager::ProgramUnitTest(GrContext* context, int maxStages, int ma
 
 static int get_glprograms_max_stages(const sk_gpu_test::ContextInfo& ctxInfo) {
     GrContext* context = ctxInfo.grContext();
-    GrGLGpu* gpu = static_cast<GrGLGpu*>(context->getGpu());
+    GrGLGpu* gpu = static_cast<GrGLGpu*>(context->contextPriv().getGpu());
     int maxStages = 6;
     if (kGLES_GrGLStandard == gpu->glStandard()) {
     // We've had issues with driver crashes and HW limits being exceeded with many effects on

@@ -7,6 +7,7 @@
 
 #include "SkTextBlobRunIterator.h"
 
+#include "SkPaintPriv.h"
 #include "SkReadBuffer.h"
 #include "SkSafeMath.h"
 #include "SkTypeface.h"
@@ -26,7 +27,7 @@ public:
     RunFont(const SkPaint& paint)
         : fSize(paint.getTextSize())
         , fScaleX(paint.getTextScaleX())
-        , fTypeface(SkSafeRef(paint.getTypeface()))
+        , fTypeface(SkPaintPriv::RefTypefaceOrDefault(paint))
         , fSkewX(paint.getTextSkewX())
         , fAlign(paint.getTextAlign())
         , fHinting(paint.getHinting())
@@ -66,12 +67,10 @@ private:
         SkPaint::kFakeBoldText_Flag       |
         SkPaint::kLinearText_Flag         |
         SkPaint::kSubpixelText_Flag       |
-        SkPaint::kDevKernText_Flag        |
         SkPaint::kLCDRenderText_Flag      |
         SkPaint::kEmbeddedBitmapText_Flag |
         SkPaint::kAutoHinting_Flag        |
-        SkPaint::kVerticalText_Flag       |
-        SkPaint::kGenA8FromLCD_Flag;
+        SkPaint::kVerticalText_Flag       ;
 
     SkScalar                 fSize;
     SkScalar                 fScaleX;
@@ -794,6 +793,7 @@ sk_sp<SkTextBlob> SkTextBlob::MakeFromBuffer(SkReadBuffer& reader) {
     reader.readRect(&bounds);
 
     SkTextBlobBuilder blobBuilder;
+    SkSafeMath safe;
     for (;;) {
         int glyphCount = reader.read32();
         if (glyphCount == 0) {
@@ -817,7 +817,16 @@ sk_sp<SkTextBlob> SkTextBlob::MakeFromBuffer(SkReadBuffer& reader) {
         SkPaint font;
         reader.readPaint(&font);
 
-        if (!reader.isValid()) {
+        // Compute the expected size of the buffer and ensure we have enough to deserialize
+        // a run before allocating it.
+        const size_t glyphSize = safe.mul(glyphCount, sizeof(uint16_t)),
+                     posSize =
+                             safe.mul(glyphCount, safe.mul(sizeof(SkScalar), ScalarsPerGlyph(pos))),
+                     clusterSize = pe.extended ? safe.mul(glyphCount, sizeof(uint32_t)) : 0;
+        const size_t totalSize =
+                safe.add(safe.add(glyphSize, posSize), safe.add(clusterSize, textSize));
+
+        if (!reader.isValid() || !safe || totalSize > reader.available()) {
             return nullptr;
         }
 
@@ -844,14 +853,13 @@ sk_sp<SkTextBlob> SkTextBlob::MakeFromBuffer(SkReadBuffer& reader) {
             return nullptr;
         }
 
-        if (!reader.readByteArray(buf->glyphs, glyphCount * sizeof(uint16_t)) ||
-            !reader.readByteArray(buf->pos,
-                                  glyphCount * sizeof(SkScalar) * ScalarsPerGlyph(pos))) {
-                return nullptr;
+        if (!reader.readByteArray(buf->glyphs, glyphSize) ||
+            !reader.readByteArray(buf->pos, posSize)) {
+            return nullptr;
             }
 
         if (pe.extended) {
-            if (!reader.readByteArray(buf->clusters, glyphCount * sizeof(uint32_t))  ||
+            if (!reader.readByteArray(buf->clusters, clusterSize) ||
                 !reader.readByteArray(buf->utf8text, textSize)) {
                 return nullptr;
             }
@@ -909,6 +917,13 @@ sk_sp<SkData> SkTextBlob::serialize(SkTypefaceCatalogerProc proc, void* ctx) con
     procs.fTypefaceProc = catalog_typeface_proc;
     procs.fTypefaceCtx  = &state;
     return this->serialize(procs);
+}
+
+size_t SkTextBlob::serialize(const SkSerialProcs& procs, void* memory, size_t memory_size) const {
+    SkBinaryWriteBuffer buffer(memory, memory_size);
+    buffer.setSerialProcs(procs);
+    this->flatten(buffer);
+    return buffer.usingInitialStorage() ? buffer.bytesWritten() : 0u;
 }
 
 namespace {

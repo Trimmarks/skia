@@ -983,6 +983,62 @@ DEF_TEST(SkSLTexture, r) {
          "}\n");
 }
 
+DEF_TEST(SkSLSharpen, r) {
+    SkSL::Program::Settings settings;
+    settings.fSharpenTextures = true;
+    sk_sp<GrShaderCaps> caps = SkSL::ShaderCapsFactory::Default();
+    settings.fCaps = caps.get();
+    SkSL::Program::Inputs inputs;
+    test(r,
+         "uniform sampler1D one;"
+         "uniform sampler2D two;"
+         "void main() {"
+         "float4 a = texture(one, 0);"
+         "float4 b = texture(two, float2(0));"
+         "float4 c = texture(one, float2(0));"
+         "float4 d = texture(two, float3(0));"
+         "sk_FragColor = half4(a.x, b.x, c.x, d.x);"
+         "}",
+         settings,
+         "#version 400\n"
+         "out vec4 sk_FragColor;\n"
+         "uniform sampler1D one;\n"
+         "uniform sampler2D two;\n"
+         "void main() {\n"
+         "    vec4 a = texture(one, 0.0, -0.5);\n"
+         "    vec4 b = texture(two, vec2(0.0), -0.5);\n"
+         "    vec4 c = textureProj(one, vec2(0.0), -0.5);\n"
+         "    vec4 d = textureProj(two, vec3(0.0), -0.5);\n"
+         "    sk_FragColor = vec4(a.x, b.x, c.x, d.x);\n"
+         "}\n",
+         &inputs);
+
+    caps = SkSL::ShaderCapsFactory::Version110();
+    settings.fCaps = caps.get();
+    test(r,
+         "uniform sampler1D one;"
+         "uniform sampler2D two;"
+         "void main() {"
+         "float4 a = texture(one, 0);"
+         "float4 b = texture(two, float2(0));"
+         "float4 c = texture(one, float2(0));"
+         "float4 d = texture(two, float3(0));"
+         "sk_FragColor = half4(a.x, b.x, c.x, d.x);"
+         "}",
+         settings,
+         "#version 110\n"
+         "uniform sampler1D one;\n"
+         "uniform sampler2D two;\n"
+         "void main() {\n"
+         "    vec4 a = texture1D(one, 0.0, -0.5);\n"
+         "    vec4 b = texture2D(two, vec2(0.0), -0.5);\n"
+         "    vec4 c = texture1DProj(one, vec2(0.0), -0.5);\n"
+         "    vec4 d = texture2DProj(two, vec3(0.0), -0.5);\n"
+         "    gl_FragColor = vec4(a.x, b.x, c.x, d.x);\n"
+         "}\n",
+         &inputs);
+}
+
 DEF_TEST(SkSLOffset, r) {
     test(r,
          "struct Test {"
@@ -1080,9 +1136,8 @@ DEF_TEST(SkSLFragCoord, r) {
          "in vec4 pos;\n"
          "void main() {\n"
          "    sk_FragCoord_Workaround = (gl_Position = pos);\n"
-         "    gl_Position = vec4(gl_Position.x * sk_RTAdjust.x + gl_Position.w * sk_RTAdjust.y, "
-              "gl_Position.y * sk_RTAdjust.z + gl_Position.w * sk_RTAdjust.w, 0.0, "
-              "gl_Position.w);\n"
+         "    gl_Position = vec4(gl_Position.xy * sk_RTAdjust.xz + gl_Position.ww * sk_RTAdjust.yw,"
+                                " 0.0, gl_Position.w);\n"
          "}\n",
          SkSL::Program::kVertex_Kind);
 
@@ -1093,8 +1148,11 @@ DEF_TEST(SkSLFragCoord, r) {
          "in vec4 sk_FragCoord_Workaround;\n"
          "out vec4 sk_FragColor;\n"
          "void main() {\n"
-         "    sk_FragColor.xy = vec4(sk_FragCoord_Workaround.xyz / sk_FragCoord_Workaround.w, "
-             "1.0 / sk_FragCoord_Workaround.w).xy;\n"
+         "    float sk_FragCoord_InvW = 1. / sk_FragCoord_Workaround.w;\n"
+         "    vec4 sk_FragCoord_Resolved = vec4(sk_FragCoord_Workaround.xyz * "
+              "sk_FragCoord_InvW, sk_FragCoord_InvW);\n"
+         "    sk_FragCoord_Resolved.xy = floor(sk_FragCoord_Resolved.xy) + vec2(.5);\n"
+         "    sk_FragColor.xy = sk_FragCoord_Resolved.xy;\n"
          "}\n");
 }
 
@@ -1759,10 +1817,8 @@ DEF_TEST(SkSLNormalization, r) {
          "uniform vec4 sk_RTAdjust;\n"
          "void main() {\n"
          "    gl_Position = vec4(1.0);\n"
-         "    gl_Position = vec4(gl_Position.x * sk_RTAdjust.x + gl_Position.w * sk_RTAdjust.y, "
-                                "gl_Position.y * sk_RTAdjust.z + gl_Position.w * sk_RTAdjust.w, "
-                                "0.0, "
-                                "gl_Position.w);\n"
+         "    gl_Position = vec4(gl_Position.xy * sk_RTAdjust.xz + gl_Position.ww * "
+                                "sk_RTAdjust.yw, 0.0, gl_Position.w);\n"
          "}\n",
          SkSL::Program::kVertex_Kind);
     test(r,
@@ -1786,21 +1842,119 @@ DEF_TEST(SkSLNormalization, r) {
          "void main() {\n"
          "    gl_Position = gl_in[0].gl_Position + vec4(-0.5, 0.0, 0.0, float(gl_InvocationID));\n"
          "    {\n"
-         "        gl_Position = vec4(gl_Position.x * sk_RTAdjust.x + gl_Position.w * "
-                               "sk_RTAdjust.y, gl_Position.y * sk_RTAdjust.z + gl_Position.w * "
-                               "sk_RTAdjust.w, 0.0, gl_Position.w);\n"
+         "        gl_Position = vec4(gl_Position.xy * sk_RTAdjust.xz + gl_Position.ww * "
+                                    "sk_RTAdjust.yw, 0.0, gl_Position.w);\n"
          "        EmitVertex();\n"
          "    }\n"
          "    gl_Position = gl_in[0].gl_Position + vec4(0.5, 0.0, 0.0, float(gl_InvocationID));\n"
          "    {\n"
-         "        gl_Position = vec4(gl_Position.x * sk_RTAdjust.x + gl_Position.w * "
-                               "sk_RTAdjust.y, gl_Position.y * sk_RTAdjust.z + gl_Position.w * "
-                               "sk_RTAdjust.w, 0.0, gl_Position.w);\n"
+         "        gl_Position = vec4(gl_Position.xy * sk_RTAdjust.xz + gl_Position.ww * "
+                                    "sk_RTAdjust.yw, 0.0, gl_Position.w);\n"
          "        EmitVertex();\n"
          "    }\n"
          "    EndPrimitive();\n"
          "}\n",
          SkSL::Program::kGeometry_Kind);
+}
+
+DEF_TEST(SkSLTernaryLValue, r) {
+    test(r,
+         "void main() { half r, g; (true ? r : g) = 1; (false ? r : g) = 0; "
+         "sk_FragColor = half4(r, g, 1, 1); }",
+         *SkSL::ShaderCapsFactory::Default(),
+         "#version 400\n"
+         "out vec4 sk_FragColor;\n"
+         "void main() {\n"
+         "    sk_FragColor = vec4(1.0, 0.0, 1.0, 1.0);\n"
+         "}\n");
+    test(r,
+         "void main() { half r, g; (true ? r : g) = sqrt(1); (false ? r : g) = sqrt(0); "
+         "sk_FragColor = half4(r, g, 1, 1); }",
+         *SkSL::ShaderCapsFactory::Default(),
+         "#version 400\n"
+         "out vec4 sk_FragColor;\n"
+         "void main() {\n"
+         "    float r, g;\n"
+         "    r = sqrt(1.0);\n"
+         "    g = sqrt(0.0);\n"
+         "    sk_FragColor = vec4(r, g, 1.0, 1.0);\n"
+         "}\n");
+    test(r,
+         "void main() {"
+         "half r, g;"
+         "(sqrt(1) > 0 ? r : g) = sqrt(1);"
+         "(sqrt(0) > 0 ? r : g) = sqrt(0);"
+         "sk_FragColor = half4(r, g, 1, 1);"
+         "}",
+         *SkSL::ShaderCapsFactory::Default(),
+         "#version 400\n"
+         "out vec4 sk_FragColor;\n"
+         "void main() {\n"
+         "    float r, g;\n"
+         "    sqrt(1.0) > 0.0 ? r : g = sqrt(1.0);\n"
+         "    sqrt(0.0) > 0.0 ? r : g = sqrt(0.0);\n"
+         "    sk_FragColor = vec4(r, g, 1.0, 1.0);\n"
+         "}\n");
+}
+
+DEF_TEST(SkSLIncompleteShortIntPrecision, r) {
+    test(r,
+         "uniform sampler2D tex;"
+         "in float2 texcoord;"
+         "in short2 offset;"
+         "void main() {"
+         "    short scalar = offset.y;"
+         "    sk_FragColor = texture(tex, texcoord + float2(offset * scalar));"
+         "}",
+         *SkSL::ShaderCapsFactory::UsesPrecisionModifiers(),
+         "#version 400\n"
+         "precision mediump float;\n"
+         "out mediump vec4 sk_FragColor;\n"
+         "uniform sampler2D tex;\n"
+         "in highp vec2 texcoord;\n"
+         "in mediump ivec2 offset;\n"
+         "void main() {\n"
+         "    mediump int scalar = offset.y;\n"
+         "    sk_FragColor = texture(tex, texcoord + vec2(offset * scalar));\n"
+         "}\n",
+         SkSL::Program::kFragment_Kind);
+    test(r,
+         "uniform sampler2D tex;"
+         "in float2 texcoord;"
+         "in short2 offset;"
+         "void main() {"
+         "    short scalar = offset.y;"
+         "    sk_FragColor = texture(tex, texcoord + float2(offset * scalar));"
+         "}",
+         *SkSL::ShaderCapsFactory::IncompleteShortIntPrecision(),
+         "#version 310es\n"
+         "precision mediump float;\n"
+         "out mediump vec4 sk_FragColor;\n"
+         "uniform sampler2D tex;\n"
+         "in highp vec2 texcoord;\n"
+         "in highp ivec2 offset;\n"
+         "void main() {\n"
+         "    highp int scalar = offset.y;\n"
+         "    sk_FragColor = texture(tex, texcoord + vec2(offset * scalar));\n"
+         "}\n",
+         SkSL::Program::kFragment_Kind);
+}
+
+DEF_TEST(SkSLFrExp, r) {
+    test(r,
+         "void main() {"
+         "    int exp;"
+         "    float foo = frexp(0.5, exp);"
+         "    sk_FragColor = float4(exp);"
+         "}",
+         *SkSL::ShaderCapsFactory::Default(),
+         "#version 400\n"
+         "out vec4 sk_FragColor;\n"
+         "void main() {\n"
+         "    int exp;\n"
+         "    float foo = frexp(0.5, exp);\n"
+         "    sk_FragColor = vec4(float(exp));\n"
+         "}\n");
 }
 
 #endif

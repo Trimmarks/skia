@@ -6,6 +6,7 @@
  */
 
 #include "SkFloatBits.h"
+#include "SkMathPriv.h"
 #include "SkMatrixPriv.h"
 #include "SkNx.h"
 #include "SkPaint.h"
@@ -51,10 +52,6 @@ static void normalize_perspective(SkScalar mat[9]) {
 // chrome's layouttests.
 //
 #define SK_LEGACY_MATRIX_MATH_ORDER
-
-static inline float SkDoubleToFloat(double x) {
-    return static_cast<float>(x);
-}
 
 /*      [scale-x    skew-x      trans-x]   [X]   [X']
         [skew-y     scale-y     trans-y] * [Y] = [Y']
@@ -620,7 +617,7 @@ bool SkMatrix::setRectToRect(const SkRect& src, const SkRect& dst, ScaleToFit al
 ///////////////////////////////////////////////////////////////////////////////
 
 static inline float muladdmul(float a, float b, float c, float d) {
-    return SkDoubleToFloat((double)a * b + (double)c * d);
+    return sk_double_to_float((double)a * b + (double)c * d);
 }
 
 static inline float rowcol3(const float row[], const float col[]) {
@@ -1146,7 +1143,7 @@ bool SkMatrix::mapRect(SkRect* dst, const SkRect& src) const {
 
         src.toQuad(quad);
         this->mapPoints(quad, quad, 4);
-        dst->set(quad, 4);
+        dst->setBoundsNoCheck(quad, 4);
         return this->rectStaysRect();   // might still return true if rotated by 90, etc.
     }
 }
@@ -1363,32 +1360,32 @@ bool SkMatrix::Poly4Proc(const SkPoint srcPt[], SkMatrix* dst,
 
     /* check if abs(x2) > abs(y2) */
     if ( x2 > 0 ? y2 > 0 ? x2 > y2 : x2 > -y2 : y2 > 0 ? -x2 > y2 : x2 < y2) {
-        float denom = (x1 * y2 / x2) - y1;
+        float denom = sk_ieee_float_divide(x1 * y2, x2) - y1;
         if (checkForZero(denom)) {
             return false;
         }
         a1 = (((x0 - x1) * y2 / x2) - y0 + y1) / denom;
     } else {
-        float denom = x1 - (y1 * x2 / y2);
+        float denom = x1 - sk_ieee_float_divide(y1 * x2, y2);
         if (checkForZero(denom)) {
             return false;
         }
-        a1 = (x0 - x1 - ((y0 - y1) * x2 / y2)) / denom;
+        a1 = (x0 - x1 - sk_ieee_float_divide((y0 - y1) * x2, y2)) / denom;
     }
 
     /* check if abs(x1) > abs(y1) */
     if ( x1 > 0 ? y1 > 0 ? x1 > y1 : x1 > -y1 : y1 > 0 ? -x1 > y1 : x1 < y1) {
-        float denom = y2 - (x2 * y1 / x1);
+        float denom = y2 - sk_ieee_float_divide(x2 * y1, x1);
         if (checkForZero(denom)) {
             return false;
         }
-        a2 = (y0 - y2 - ((x0 - x2) * y1 / x1)) / denom;
+        a2 = (y0 - y2 - sk_ieee_float_divide((x0 - x2) * y1, x1)) / denom;
     } else {
-        float denom = (y2 * x1 / y1) - x2;
+        float denom = sk_ieee_float_divide(y2 * x1, y1) - x2;
         if (checkForZero(denom)) {
             return false;
         }
-        a2 = (((y0 - y2) * x1 / y1) - x0 + x2) / denom;
+        a2 = (sk_ieee_float_divide((y0 - y2) * x1, y1) - x0 + x2) / denom;
     }
 
     float invScale = SkScalarInvert(scale.fX);
@@ -1655,10 +1652,8 @@ size_t SkMatrix::readFromMemory(const void* buffer, size_t length) {
     if (length < sizeInMemory) {
         return 0;
     }
-    if (buffer) {
-        memcpy(fMat, buffer, sizeInMemory);
-        this->setTypeMask(kUnknown_Mask);
-    }
+    memcpy(fMat, buffer, sizeInMemory);
+    this->setTypeMask(kUnknown_Mask);
     return sizeInMemory;
 }
 

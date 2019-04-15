@@ -38,6 +38,7 @@ public:
 
 private:
     size_t onGpuMemorySize() const override { return 100; }
+    const char* getResourceType() const override { return "bench"; }
     typedef GrGpuResource INHERITED;
 };
 
@@ -83,7 +84,7 @@ protected:
         cache->purgeAllUnlocked();
         SkASSERT(0 == cache->getResourceCount() && 0 == cache->getResourceBytes());
 
-        GrGpu* gpu = context->getGpu();
+        GrGpu* gpu = context->contextPriv().getGpu();
 
         for (int i = 0; i < loops; ++i) {
             populate_cache(gpu, CACHE_SIZE_COUNT, fKeyData32Count);
@@ -129,7 +130,7 @@ protected:
         cache->purgeAllUnlocked();
         SkASSERT(0 == cache->getResourceCount() && 0 == cache->getResourceBytes());
 
-        GrGpu* gpu = fContext->getGpu();
+        GrGpu* gpu = fContext->contextPriv().getGpu();
 
         populate_cache(gpu, CACHE_SIZE_COUNT, fKeyData32Count);
     }

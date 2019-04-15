@@ -29,19 +29,19 @@ public:
     GrVkCaps(const GrContextOptions& contextOptions, const GrVkInterface* vkInterface,
              VkPhysicalDevice device, uint32_t featureFlags, uint32_t extensionFlags);
 
-    int getSampleCount(int requestedCount, GrPixelConfig config) const override;
-
     bool isConfigTexturable(GrPixelConfig config) const override {
         return SkToBool(ConfigInfo::kTextureable_Flag & fConfigTable[config].fOptimalFlags);
-    }
-
-    bool isConfigRenderable(GrPixelConfig config, bool withMSAA) const override {
-        return SkToBool(ConfigInfo::kRenderable_Flag & fConfigTable[config].fOptimalFlags);
     }
 
     bool isConfigCopyable(GrPixelConfig config) const override {
         return true;
     }
+
+    int getRenderTargetSampleCount(int requestedCount, GrPixelConfig config) const override;
+    int maxRenderTargetSampleCount(GrPixelConfig config) const override;
+
+    bool surfaceSupportsWritePixels(const GrSurface*) const override;
+    bool surfaceSupportsReadPixels(const GrSurface*) const override { return true; }
 
     bool isConfigTexturableLinearly(GrPixelConfig config) const {
         return SkToBool(ConfigInfo::kTextureable_Flag & fConfigTable[config].fLinearFlags);
@@ -75,11 +75,6 @@ public:
         return fMustDoCopiesFromOrigin;
     }
 
-    // Check whether we support using draws for copies.
-    bool supportsCopiesAsDraws() const {
-        return fSupportsCopiesAsDraws;
-    }
-
     // On Nvidia there is a current bug where we must the current command buffer before copy
     // operations or else the copy will not happen. This includes copies, blits, resolves, and copy
     // as draws.
@@ -101,6 +96,13 @@ public:
         return fNewCBOnPipelineChange;
     }
 
+    // On certain Intel devices/drivers (IntelHD405) there is a bug if we try to flush non-coherent
+    // memory and pass in VK_WHOLE_SIZE. This returns whether or not it is safe to use VK_WHOLE_SIZE
+    // or not.
+    bool canUseWholeSizeOnFlushMappedMemory() const {
+        return fCanUseWholeSizeOnFlushMappedMemory;
+    }
+
     /**
      * Returns both a supported and most prefered stencil format to use in draws.
      */
@@ -108,7 +110,28 @@ public:
         return fPreferedStencilFormat;
     }
 
-    bool initDescForDstCopy(const GrRenderTargetProxy* src, GrSurfaceDesc* desc,
+    /**
+     * Helpers used by canCopySurface. In all cases if the SampleCnt parameter is zero that means
+     * the surface is not a render target, otherwise it is the number of samples in the render
+     * target.
+     */
+    bool canCopyImage(GrPixelConfig dstConfig, int dstSampleCnt, GrSurfaceOrigin dstOrigin,
+                      GrPixelConfig srcConfig, int srcSamplecnt, GrSurfaceOrigin srcOrigin) const;
+
+    bool canCopyAsBlit(GrPixelConfig dstConfig, int dstSampleCnt, bool dstIsLinear,
+                       GrPixelConfig srcConfig, int srcSampleCnt, bool srcIsLinear) const;
+
+    bool canCopyAsResolve(GrPixelConfig dstConfig, int dstSampleCnt, GrSurfaceOrigin dstOrigin,
+                          GrPixelConfig srcConfig, int srcSamplecnt,
+                          GrSurfaceOrigin srcOrigin) const;
+
+    bool canCopyAsDraw(GrPixelConfig dstConfig, bool dstIsRenderable,
+                       GrPixelConfig srcConfig, bool srcIsTextureable) const;
+
+    bool canCopySurface(const GrSurfaceProxy* dst, const GrSurfaceProxy* src,
+                        const SkIRect& srcRect, const SkIPoint& dstPoint) const override;
+
+    bool initDescForDstCopy(const GrRenderTargetProxy* src, GrSurfaceDesc* desc, GrSurfaceOrigin*,
                             bool* rectsMustMatch, bool* disallowSubrect) const override;
 
     bool validateBackendTexture(const GrBackendTexture&, SkColorType,
@@ -116,10 +139,15 @@ public:
     bool validateBackendRenderTarget(const GrBackendRenderTarget&, SkColorType,
                                      GrPixelConfig*) const override;
 
+    bool getConfigFromBackendFormat(const GrBackendFormat&, SkColorType,
+                                    GrPixelConfig*) const override;
+
 private:
     enum VkVendor {
         kAMD_VkVendor = 4098,
+        kARM_VkVendor = 5045,
         kImagination_VkVendor = 4112,
+        kIntel_VkVendor = 32902,
         kNvidia_VkVendor = 4318,
         kQualcomm_VkVendor = 20803,
     };
@@ -130,11 +158,11 @@ private:
                     const VkPhysicalDeviceMemoryProperties&,
                     uint32_t featureFlags);
     void initShaderCaps(const VkPhysicalDeviceProperties&, uint32_t featureFlags);
-    void initSampleCount(const VkPhysicalDeviceProperties& properties);
-
 
     void initConfigTable(const GrVkInterface*, VkPhysicalDevice, const VkPhysicalDeviceProperties&);
     void initStencilFormat(const GrVkInterface* iface, VkPhysicalDevice physDev);
+
+    void applyDriverCorrectnessWorkarounds(const VkPhysicalDeviceProperties&);
 
     struct ConfigInfo {
         ConfigInfo() : fOptimalFlags(0), fLinearFlags(0) {}
@@ -165,13 +193,13 @@ private:
 
     bool fMustDoCopiesFromOrigin;
 
-    bool fSupportsCopiesAsDraws;
-
     bool fMustSubmitCommandsBeforeCopyOp;
 
     bool fMustSleepOnTearDown;
 
     bool fNewCBOnPipelineChange;
+
+    bool fCanUseWholeSizeOnFlushMappedMemory;
 
     typedef GrCaps INHERITED;
 };

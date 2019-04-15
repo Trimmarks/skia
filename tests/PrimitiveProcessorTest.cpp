@@ -12,6 +12,7 @@
 
 #if SK_SUPPORT_GPU
 #include "GrContext.h"
+#include "GrContextPriv.h"
 #include "GrGeometryProcessor.h"
 #include "GrGpu.h"
 #include "GrOpFlushState.h"
@@ -73,7 +74,7 @@ private:
                         const GP& gp = args.fGP.cast<GP>();
                         args.fVaryingHandler->emitAttributes(gp);
                         this->writeOutputPosition(args.fVertBuilder, gpArgs, gp.getAttrib(0).fName);
-                        GrGLSLPPFragmentBuilder* fragBuilder = args.fFragBuilder;
+                        GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
                         fragBuilder->codeAppendf("%s = half4(1);", args.fOutputColor);
                         fragBuilder->codeAppendf("%s = half4(1);", args.fOutputCoverage);
                     }
@@ -111,40 +112,46 @@ private:
 
 DEF_GPUTEST_FOR_ALL_CONTEXTS(VertexAttributeCount, reporter, ctxInfo) {
     GrContext* context = ctxInfo.grContext();
+#if GR_GPU_STATS
+    GrGpu* gpu = context->contextPriv().getGpu();
+#endif
 
-    sk_sp<GrRenderTargetContext> renderTargetContext(context->makeDeferredRenderTargetContext(
-                                                                     SkBackingFit::kApprox,
-                                                                     1, 1, kRGBA_8888_GrPixelConfig,
-                                                                     nullptr));
+    sk_sp<GrRenderTargetContext> renderTargetContext(
+            context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kApprox,
+                                                                   1, 1, kRGBA_8888_GrPixelConfig,
+                                                                   nullptr));
     if (!renderTargetContext) {
         ERRORF(reporter, "Could not create render target context.");
         return;
     }
-    int attribCnt = context->caps()->maxVertexAttributes();
+    int attribCnt = context->contextPriv().caps()->maxVertexAttributes();
     if (!attribCnt) {
         ERRORF(reporter, "No attributes allowed?!");
         return;
     }
     context->flush();
-    context->resetGpuStats();
+    context->contextPriv().resetGpuStats();
 #if GR_GPU_STATS
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numDraws() == 0);
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numFailedDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numFailedDraws() == 0);
 #endif
+    // Adding discard to appease vulkan validation warning about loading uninitialized data on draw
+    renderTargetContext->discard();
+
     GrPaint grPaint;
     // This one should succeed.
     renderTargetContext->priv().testingOnly_addDrawOp(Op::Make(attribCnt));
     context->flush();
 #if GR_GPU_STATS
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numDraws() == 1);
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numFailedDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numDraws() == 1);
+    REPORTER_ASSERT(reporter, gpu->stats()->numFailedDraws() == 0);
 #endif
-    context->resetGpuStats();
+    context->contextPriv().resetGpuStats();
     renderTargetContext->priv().testingOnly_addDrawOp(Op::Make(attribCnt + 1));
     context->flush();
 #if GR_GPU_STATS
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numDraws() == 0);
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numFailedDraws() == 1);
+    REPORTER_ASSERT(reporter, gpu->stats()->numDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numFailedDraws() == 1);
 #endif
 }
 #endif

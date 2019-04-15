@@ -24,20 +24,15 @@ public:
     GrMtlCaps(const GrContextOptions& contextOptions, id<MTLDevice> device,
               MTLFeatureSet featureSet);
 
-    int getSampleCount(int requestedCount, GrPixelConfig config) const override;
-
     bool isConfigTexturable(GrPixelConfig config) const override {
         return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kTextureable_Flag);
     }
 
-    bool isConfigRenderable(GrPixelConfig config, bool withMSAA) const override {
-        if (withMSAA) {
-            return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kRenderable_Flag) &&
-                   SkToBool(fConfigTable[config].fFlags & ConfigInfo::kMSAA_Flag);
-        } else {
-            return SkToBool(fConfigTable[config].fFlags & ConfigInfo::kRenderable_Flag);
-        }
-    }
+    int getRenderTargetSampleCount(int requestedCount, GrPixelConfig) const override;
+    int maxRenderTargetSampleCount(GrPixelConfig) const override;
+
+    bool surfaceSupportsWritePixels(const GrSurface*) const override { return true; }
+    bool surfaceSupportsReadPixels(const GrSurface*) const override { return true; }
 
     bool isConfigCopyable(GrPixelConfig config) const override {
         return true;
@@ -51,7 +46,12 @@ public:
         return fPreferedStencilFormat;
     }
 #endif
-    bool initDescForDstCopy(const GrRenderTargetProxy* src, GrSurfaceDesc* desc,
+    bool canCopySurface(const GrSurfaceProxy* dst, const GrSurfaceProxy* src,
+                        const SkIRect& srcRect, const SkIPoint& dstPoint) const override {
+        return false;
+    }
+
+    bool initDescForDstCopy(const GrRenderTargetProxy* src, GrSurfaceDesc* desc, GrSurfaceOrigin*,
                             bool* rectsMustMatch, bool* disallowSubrect) const override {
         return false;
     }
@@ -65,12 +65,16 @@ public:
         return false;
     }
 
+    bool getConfigFromBackendFormat(const GrBackendFormat&, SkColorType,
+                                    GrPixelConfig*) const override {
+        return false;
+    }
+
 private:
     void initFeatureSet(MTLFeatureSet featureSet);
 
     void initGrCaps(const id<MTLDevice> device);
     void initShaderCaps();
-    void initSampleCount();
     void initConfigTable();
 
     struct ConfigInfo {

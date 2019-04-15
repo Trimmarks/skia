@@ -35,11 +35,6 @@ PUBLIC_API_OWNERS = (
     'hcm@google.com',
 )
 
-AUTO_COMMIT_BOTS = (
-    'update-docs@skia.org',
-    'update-skps@skia.org'
-)
-
 AUTHORS_FILE_NAME = 'AUTHORS'
 
 DOCS_PREVIEW_URL = 'https://skia.org/?cl='
@@ -60,7 +55,9 @@ PATH_PREFIX_TO_EXTRA_TRYBOTS = {
     # 'src/image/SkImage_Base.h': 'master5:pqr,stu;master1:abc1;master2:def',
 }
 
-SERVICE_ACCOUNT_SUFFIX = '@skia-buildbots.google.com.iam.gserviceaccount.com'
+SERVICE_ACCOUNT_SUFFIX = [
+    '@%s.iam.gserviceaccount.com' % project for project in [
+        'skia-buildbots.google.com', 'skia-swarming-bots']]
 
 
 def _CheckChangeHasEol(input_api, output_api, source_file_filter=None):
@@ -107,6 +104,29 @@ def _PythonChecks(input_api, output_api):
       input_api, output_api,
       disabled_warnings=pylint_disabled_warnings,
       white_list=affected_python_files)
+
+
+def _JsonChecks(input_api, output_api):
+  """Run checks on any modified json files."""
+  failing_files = []
+  for affected_file in input_api.AffectedFiles(None):
+    affected_file_path = affected_file.LocalPath()
+    is_json = affected_file_path.endswith('.json')
+    is_metadata = (affected_file_path.startswith('site/') and
+                   affected_file_path.endswith('/METADATA'))
+    if is_json or is_metadata:
+      try:
+        input_api.json.load(open(affected_file_path, 'r'))
+      except ValueError:
+        failing_files.append(affected_file_path)
+
+  results = []
+  if failing_files:
+    results.append(
+        output_api.PresubmitError(
+            'The following files contain invalid json:\n%s\n\n' %
+                '\n'.join(failing_files)))
+  return results
 
 
 def _IfDefChecks(input_api, output_api):
@@ -236,6 +256,7 @@ def _CommonChecks(input_api, output_api):
       input_api.canned_checks.CheckChangeHasNoStrayWhitespace(
           input_api, output_api, source_file_filter=sources))
   results.extend(_PythonChecks(input_api, output_api))
+  results.extend(_JsonChecks(input_api, output_api))
   results.extend(_IfDefChecks(input_api, output_api))
   results.extend(_CopyrightChecks(input_api, output_api,
                                   source_file_filter=sources))
@@ -340,8 +361,9 @@ def _CheckOwnerIsInAuthorsFile(input_api, output_api):
     owner_email = cr.GetOwnerEmail()
 
     # Service accounts don't need to be in AUTHORS.
-    if owner_email.endswith(SERVICE_ACCOUNT_SUFFIX):
-      return results
+    for suffix in SERVICE_ACCOUNT_SUFFIX:
+      if owner_email.endswith(suffix):
+        return results
 
     try:
       authors_content = ''
@@ -478,11 +500,12 @@ def PostUploadHook(cl, change, output_api):
 
   issue = cl.issue
   if issue:
-    # Skip PostUploadHooks for all auto-commit bots. New patchsets (caused
-    # due to PostUploadHooks) invalidates the CQ+2 vote from the
-    # "--use-commit-queue" flag to "git cl upload".
-    if cl.GetIssueOwner() in AUTO_COMMIT_BOTS:
-      return results
+    # Skip PostUploadHooks for all auto-commit service account bots. New
+    # patchsets (caused due to PostUploadHooks) invalidates the CQ+2 vote from
+    # the "--use-commit-queue" flag to "git cl upload".
+    for suffix in SERVICE_ACCOUNT_SUFFIX:
+      if cl.GetIssueOwner().endswith(suffix):
+        return results
 
     original_description_lines, footers = cl.GetDescriptionFooters()
     new_description_lines = list(original_description_lines)

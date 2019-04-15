@@ -17,13 +17,8 @@
 #include "SkRect.h"
 
 void GrGpuRTCommandBuffer::clear(const GrFixedClip& clip, GrColor color) {
-#ifdef SK_DEBUG
-    GrRenderTarget* rt = fRenderTarget;
-    SkASSERT(rt);
-    SkASSERT(!clip.scissorEnabled() ||
-             (SkIRect::MakeWH(rt->width(), rt->height()).contains(clip.scissorRect()) &&
-              SkIRect::MakeWH(rt->width(), rt->height()) != clip.scissorRect()));
-#endif
+    SkASSERT(fRenderTarget);
+
     this->onClear(clip, color);
 }
 
@@ -39,6 +34,7 @@ bool GrGpuRTCommandBuffer::draw(const GrPipeline& pipeline,
                                 const SkRect& bounds) {
 #ifdef SK_DEBUG
     SkASSERT(!primProc.hasInstanceAttribs() || this->gpu()->caps()->instanceAttribSupport());
+    SkASSERT(!primProc.willUsePrimitiveRestart() || this->gpu()->caps()->usePrimitiveRestart());
     for (int i = 0; i < meshCount; ++i) {
         SkASSERT(!GrPrimTypeRequiresGeometryShaderSupport(meshes[i].primitiveType()) ||
                  this->gpu()->caps()->shaderCaps()->geometryShaderSupport());

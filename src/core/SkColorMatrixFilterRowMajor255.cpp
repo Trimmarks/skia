@@ -164,7 +164,7 @@ void SkColorMatrixFilterRowMajor255::onAppendStages(SkRasterPipeline* p,
 }
 
 sk_sp<SkColorFilter>
-SkColorMatrixFilterRowMajor255::makeComposed(sk_sp<SkColorFilter> innerFilter) const {
+SkColorMatrixFilterRowMajor255::onMakeComposed(sk_sp<SkColorFilter> innerFilter) const {
     SkScalar innerMatrix[20];
     if (innerFilter->asColorMatrix(innerMatrix) && !needs_clamping(innerMatrix)) {
         SkScalar concat[20];
@@ -299,7 +299,6 @@ std::unique_ptr<GrFragmentProcessor> SkColorMatrixFilterRowMajor255::asFragmentP
 
 #endif
 
-#ifndef SK_IGNORE_TO_STRING
 void SkColorMatrixFilterRowMajor255::toString(SkString* str) const {
     str->append("SkColorMatrixFilterRowMajor255: ");
 
@@ -312,7 +311,6 @@ void SkColorMatrixFilterRowMajor255::toString(SkString* str) const {
     }
     str->append(")");
 }
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -331,5 +329,5 @@ SkColorMatrixFilterRowMajor255::MakeSingleChannelOutput(const SkScalar row[5]) {
         memcpy(cf->fMatrix + 5 * i, row, sizeof(SkScalar) * 5);
     }
     cf->initState();
-    return cf;
+    return std::move(cf);
 }

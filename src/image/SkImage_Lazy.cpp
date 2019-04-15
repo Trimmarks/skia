@@ -10,7 +10,6 @@
 
 #include "SkBitmap.h"
 #include "SkBitmapCache.h"
-#include "SkColorSpace_Base.h"
 #include "SkData.h"
 #include "SkImageGenerator.h"
 #include "SkImagePriv.h"
@@ -71,6 +70,9 @@ public:
     SkImageInfo onImageInfo() const override {
         return fInfo;
     }
+    SkColorType onColorType() const override {
+        return kUnknown_SkColorType;
+    }
     SkAlphaType onAlphaType() const override {
         return fInfo.alphaType();
     }
@@ -83,7 +85,7 @@ public:
                                             sk_sp<SkColorSpace>*,
                                             SkScalar scaleAdjust[2]) const override;
 #endif
-    SkData* onRefEncoded() const override;
+    sk_sp<SkData> onRefEncoded() const override;
     sk_sp<SkImage> onMakeSubset(const SkIRect&) const override;
     bool getROPixels(SkBitmap*, SkColorSpace* dstColorSpace, CachingHint) const override;
     bool onIsLazyGenerated() const override { return true; }
@@ -268,9 +270,8 @@ struct CacheCaps {
 
 #if SK_SUPPORT_GPU
     bool supportsHalfFloat() const {
-        return !fCaps ||
-            (fCaps->isConfigTexturable(kRGBA_half_GrPixelConfig) &&
-             fCaps->isConfigRenderable(kRGBA_half_GrPixelConfig, false));
+        return !fCaps || (fCaps->isConfigTexturable(kRGBA_half_GrPixelConfig) &&
+                          fCaps->isConfigRenderable(kRGBA_half_GrPixelConfig));
     }
 
     bool supportsSRGB() const {
@@ -303,6 +304,9 @@ SkImageCacherator::CachedFormat SkImage_Lazy::chooseCacheFormat(SkColorSpace* ds
         case kAlpha_8_SkColorType:
         case kRGB_565_SkColorType:
         case kARGB_4444_SkColorType:
+        case kRGB_888x_SkColorType:
+        case kRGBA_1010102_SkColorType:
+        case kRGB_101010x_SkColorType:
             // We don't support color space on these formats, so always decode in legacy mode:
             // TODO: Ask the codec to decode these to something else (at least sRGB 8888)?
             return kLegacy_CachedFormat;
@@ -564,7 +568,7 @@ bool SkImage_Lazy::onReadPixels(const SkImageInfo& dstInfo, void* dstPixels, siz
     return false;
 }
 
-SkData* SkImage_Lazy::onRefEncoded() const {
+sk_sp<SkData> SkImage_Lazy::onRefEncoded() const {
     ScopedGenerator generator(fSharedGenerator);
     return generator->refEncodedData();
 }
@@ -675,7 +679,7 @@ void SkImage_Lazy::makeCacheKeyFromOrigKey(const GrUniqueKey& origKey, CachedFor
     SkASSERT(!cacheKey->isValid());
     if (origKey.isValid()) {
         static const GrUniqueKey::Domain kDomain = GrUniqueKey::GenerateDomain();
-        GrUniqueKey::Builder builder(cacheKey, origKey, kDomain, 1);
+        GrUniqueKey::Builder builder(cacheKey, origKey, kDomain, 1, "Image");
         builder[0] = format;
     }
 }
@@ -700,12 +704,13 @@ static void set_key_on_proxy(GrProxyProvider* proxyProvider,
                              const GrUniqueKey& key) {
     if (key.isValid()) {
         SkASSERT(proxy->origin() == kTopLeft_GrSurfaceOrigin);
-        if (originalProxy) {
+        if (originalProxy && originalProxy->getUniqueKey().isValid()) {
+            SkASSERT(originalProxy->getUniqueKey() == key);
             SkASSERT(GrMipMapped::kYes == proxy->mipMapped() &&
                      GrMipMapped::kNo == originalProxy->mipMapped());
-            // If we had an originalProxy, that means there already is a proxy in the cache which
-            // matches the key, but it does not have mip levels and we require them. Thus we must
-            // remove the unique key from that proxy.
+            // If we had an originalProxy with a valid key, that means there already is a proxy in
+            // the cache which matches the key, but it does not have mip levels and we require them.
+            // Thus we must remove the unique key from that proxy.
             proxyProvider->removeUniqueKeyFromProxy(key, originalProxy);
         }
         proxyProvider->assignUniqueKeyToProxy(key, proxy);
@@ -719,7 +724,7 @@ sk_sp<SkColorSpace> SkImage_Lazy::getColorSpace(GrContext* ctx, SkColorSpace* ds
         // may want to know what space the image data is in, so return it.
         return fInfo.refColorSpace();
     } else {
-        CachedFormat format = this->chooseCacheFormat(dstColorSpace, ctx->caps());
+        CachedFormat format = this->chooseCacheFormat(dstColorSpace, ctx->contextPriv().caps());
         SkImageInfo cacheInfo = this->buildCacheInfo(format);
         return cacheInfo.refColorSpace();
     }
@@ -754,7 +759,7 @@ sk_sp<GrTextureProxy> SkImage_Lazy::lockTextureProxy(GrContext* ctx,
 
     // Determine which cached format we're going to use (which may involve decoding to a different
     // info than the generator provides).
-    CachedFormat format = this->chooseCacheFormat(dstColorSpace, ctx->caps());
+    CachedFormat format = this->chooseCacheFormat(dstColorSpace, ctx->contextPriv().caps());
 
     // Fold the cache format into our texture key
     GrUniqueKey key;
@@ -803,7 +808,7 @@ sk_sp<GrTextureProxy> SkImage_Lazy::lockTextureProxy(GrContext* ctx,
     // 3. Ask the generator to return YUV planes, which the GPU can convert. If we will be mipping
     //    the texture we fall through here and have the CPU generate the mip maps for us.
     if (!proxy && !willBeMipped && !ctx->contextPriv().disableGpuYUVConversion()) {
-        const GrSurfaceDesc desc = GrImageInfoToSurfaceDesc(cacheInfo, *ctx->caps());
+        const GrSurfaceDesc desc = GrImageInfoToSurfaceDesc(cacheInfo, *ctx->contextPriv().caps());
         ScopedGenerator generator(fSharedGenerator);
         Generator_GrYUVProvider provider(generator);
 
@@ -829,7 +834,7 @@ sk_sp<GrTextureProxy> SkImage_Lazy::lockTextureProxy(GrContext* ctx,
     SkBitmap bitmap;
     if (!proxy && this->lockAsBitmap(&bitmap, chint, format, genPixelsInfo, behavior)) {
         if (willBeMipped) {
-            proxy = GrGenerateMipMapsAndUploadToTextureProxy(proxyProvider, bitmap, dstColorSpace);
+            proxy = proxyProvider->createMipMapProxyFromBitmap(bitmap, dstColorSpace);
         }
         if (!proxy) {
             proxy = GrUploadBitmapToTextureProxy(proxyProvider, bitmap, dstColorSpace);

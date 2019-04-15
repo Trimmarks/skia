@@ -7,6 +7,7 @@
 
 #include "GrCCPathProcessor.h"
 
+#include "GrGpuCommandBuffer.h"
 #include "GrOnFlushResourceProvider.h"
 #include "GrTexture.h"
 #include "glsl/GrGLSLFragmentShaderBuilder.h"
@@ -42,13 +43,22 @@ sk_sp<const GrBuffer> GrCCPathProcessor::FindVertexBuffer(GrOnFlushResourceProvi
                                              kOctoEdgeNorms, gVertexBufferKey);
 }
 
-// Index buffer for the octagon defined above.
-static uint16_t kOctoIndices[GrCCPathProcessor::kPerInstanceIndexCount] = {
+static constexpr uint16_t kRestartStrip = 0xffff;
+
+static constexpr uint16_t kOctoIndicesAsStrips[] = {
+    1, 0, 2, 4, 3, kRestartStrip, // First half.
+    5, 4, 6, 0, 7 // Second half.
+};
+
+static constexpr uint16_t kOctoIndicesAsTris[] = {
+    // First half.
+    1, 0, 2,
     0, 4, 2,
-    0, 6, 4,
-    0, 2, 1,
     2, 4, 3,
-    4, 6, 5,
+
+    // Second half.
+    5, 4, 6,
+    4, 0, 6,
     6, 0, 7,
 };
 
@@ -56,20 +66,23 @@ GR_DECLARE_STATIC_UNIQUE_KEY(gIndexBufferKey);
 
 sk_sp<const GrBuffer> GrCCPathProcessor::FindIndexBuffer(GrOnFlushResourceProvider* onFlushRP) {
     GR_DEFINE_STATIC_UNIQUE_KEY(gIndexBufferKey);
-    return onFlushRP->findOrMakeStaticBuffer(kIndex_GrBufferType, sizeof(kOctoIndices),
-                                             kOctoIndices, gIndexBufferKey);
+    if (onFlushRP->caps()->usePrimitiveRestart()) {
+        return onFlushRP->findOrMakeStaticBuffer(kIndex_GrBufferType, sizeof(kOctoIndicesAsStrips),
+                                                 kOctoIndicesAsStrips, gIndexBufferKey);
+    } else {
+        return onFlushRP->findOrMakeStaticBuffer(kIndex_GrBufferType, sizeof(kOctoIndicesAsTris),
+                                                 kOctoIndicesAsTris, gIndexBufferKey);
+    }
 }
 
-GrCCPathProcessor::GrCCPathProcessor(GrResourceProvider* rp, sk_sp<GrTextureProxy> atlas,
-                                     SkPath::FillType fillType, const GrShaderCaps& shaderCaps)
+GrCCPathProcessor::GrCCPathProcessor(GrResourceProvider* resourceProvider,
+                                     sk_sp<GrTextureProxy> atlas,
+                                     const SkMatrix& viewMatrixIfUsingLocalCoords)
         : INHERITED(kGrCCPathProcessor_ClassID)
-        , fFillType(fillType)
         , fAtlasAccess(std::move(atlas), GrSamplerState::Filter::kNearest,
                        GrSamplerState::WrapMode::kClamp, kFragment_GrShaderFlag) {
     this->addInstanceAttrib("devbounds", kFloat4_GrVertexAttribType);
     this->addInstanceAttrib("devbounds45", kFloat4_GrVertexAttribType);
-    this->addInstanceAttrib("view_matrix", kFloat4_GrVertexAttribType);
-    this->addInstanceAttrib("view_translate", kFloat2_GrVertexAttribType);
     this->addInstanceAttrib("atlas_offset", kShort2_GrVertexAttribType);
     this->addInstanceAttrib("color", kUByte4_norm_GrVertexAttribType);
 
@@ -77,26 +90,26 @@ GrCCPathProcessor::GrCCPathProcessor(GrResourceProvider* rp, sk_sp<GrTextureProx
              this->getInstanceAttrib(InstanceAttribs::kDevBounds).fOffsetInRecord);
     SkASSERT(offsetof(Instance, fDevBounds45) ==
              this->getInstanceAttrib(InstanceAttribs::kDevBounds45).fOffsetInRecord);
-    SkASSERT(offsetof(Instance, fViewMatrix) ==
-             this->getInstanceAttrib(InstanceAttribs::kViewMatrix).fOffsetInRecord);
-    SkASSERT(offsetof(Instance, fViewTranslate) ==
-             this->getInstanceAttrib(InstanceAttribs::kViewTranslate).fOffsetInRecord);
     SkASSERT(offsetof(Instance, fAtlasOffset) ==
              this->getInstanceAttrib(InstanceAttribs::kAtlasOffset).fOffsetInRecord);
     SkASSERT(offsetof(Instance, fColor) ==
              this->getInstanceAttrib(InstanceAttribs::kColor).fOffsetInRecord);
     SkASSERT(sizeof(Instance) == this->getInstanceStride());
 
-    GR_STATIC_ASSERT(6 == kNumInstanceAttribs);
+    GR_STATIC_ASSERT(4 == kNumInstanceAttribs);
 
     this->addVertexAttrib("edge_norms", kFloat4_GrVertexAttribType);
 
-    fAtlasAccess.instantiate(rp);
-    this->addTextureSampler(&fAtlasAccess);
-}
+    if (resourceProvider->caps()->usePrimitiveRestart()) {
+        this->setWillUsePrimitiveRestart();
+    }
 
-void GrCCPathProcessor::getGLSLProcessorKey(const GrShaderCaps&, GrProcessorKeyBuilder* b) const {
-    b->add32((fFillType << 16) | this->atlasProxy()->origin());
+    fAtlasAccess.instantiate(resourceProvider);
+    this->addTextureSampler(&fAtlasAccess);
+
+    if (!viewMatrixIfUsingLocalCoords.invert(&fLocalMatrix)) {
+        fLocalMatrix.setIdentity();
+    }
 }
 
 class GLSLPathProcessor : public GrGLSLGeometryProcessor {
@@ -109,7 +122,7 @@ private:
         const GrCCPathProcessor& proc = primProc.cast<GrCCPathProcessor>();
         pdman.set2f(fAtlasAdjustUniform, 1.0f / proc.atlas()->width(),
                     1.0f / proc.atlas()->height());
-        this->setTransformDataHelper(SkMatrix::I(), pdman, &transformIter);
+        this->setTransformDataHelper(proc.localMatrix(), pdman, &transformIter);
     }
 
     GrGLSLUniformHandler::UniformHandle fAtlasAdjustUniform;
@@ -121,8 +134,29 @@ GrGLSLPrimitiveProcessor* GrCCPathProcessor::createGLSLInstance(const GrShaderCa
     return new GLSLPathProcessor();
 }
 
+void GrCCPathProcessor::drawPaths(GrOpFlushState* flushState, const GrPipeline& pipeline,
+                                  const GrBuffer* indexBuffer, const GrBuffer* vertexBuffer,
+                                  GrBuffer* instanceBuffer, int baseInstance, int endInstance,
+                                  const SkRect& bounds) const {
+    const GrCaps& caps = flushState->caps();
+    GrPrimitiveType primitiveType = caps.usePrimitiveRestart()
+                                            ? GrPrimitiveType::kTriangleStrip
+                                            : GrPrimitiveType::kTriangles;
+    int numIndicesPerInstance = caps.usePrimitiveRestart()
+                                        ? SK_ARRAY_COUNT(kOctoIndicesAsStrips)
+                                        : SK_ARRAY_COUNT(kOctoIndicesAsTris);
+    GrMesh mesh(primitiveType);
+    mesh.setIndexedInstanced(indexBuffer, numIndicesPerInstance, instanceBuffer,
+                             endInstance - baseInstance, baseInstance);
+    mesh.setVertexData(vertexBuffer);
+
+    flushState->rtCommandBuffer()->draw(pipeline, *this, &mesh, nullptr, 1, bounds);
+}
+
 void GLSLPathProcessor::onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) {
     using InstanceAttribs = GrCCPathProcessor::InstanceAttribs;
+    using Interpolation = GrGLSLVaryingHandler::Interpolation;
+
     const GrCCPathProcessor& proc = args.fGP.cast<GrCCPathProcessor>();
     GrGLSLUniformHandler* uniHandler = args.fUniformHandler;
     GrGLSLVaryingHandler* varyingHandler = args.fVaryingHandler;
@@ -134,11 +168,11 @@ void GLSLPathProcessor::onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) {
 
     varyingHandler->emitAttributes(proc);
 
-    GrGLSLVarying texcoord(kFloat2_GrSLType);
+    GrGLSLVarying texcoord(kFloat3_GrSLType);
     GrGLSLVarying color(kHalf4_GrSLType);
     varyingHandler->addVarying("texcoord", &texcoord);
-    varyingHandler->addFlatPassThroughAttribute(&proc.getInstanceAttrib(InstanceAttribs::kColor),
-                                                args.fOutputColor);
+    varyingHandler->addPassThroughAttribute(&proc.getInstanceAttrib(InstanceAttribs::kColor),
+                                            args.fOutputColor, Interpolation::kCanBeFlat);
 
     // The vertex shader bloats and intersects the devBounds and devBounds45 rectangles, in order to
     // find an octagon that circumscribes the (bloated) path.
@@ -154,14 +188,16 @@ void GLSLPathProcessor::onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) {
 
     // N[0] is the normal for the edge we are intersecting from the regular bounding box, pointing
     // out of the octagon.
-    v->codeAppendf("float2 refpt = (min(N[0].x, N[0].y) < 0) ? %s.xy : %s.zw;",
-                   proc.getInstanceAttrib(InstanceAttribs::kDevBounds).fName,
+    v->codeAppendf("float4 devbounds = %s;",
                    proc.getInstanceAttrib(InstanceAttribs::kDevBounds).fName);
+    v->codeAppend ("float2 refpt = (0 == sk_VertexID >> 2)"
+                           "? float2(min(devbounds.x, devbounds.z), devbounds.y)"
+                           ": float2(max(devbounds.x, devbounds.z), devbounds.w);");
     v->codeAppendf("refpt += N[0] * %f;", kAABloatRadius); // bloat for AA.
 
     // N[1] is the normal for the edge we are intersecting from the 45-degree bounding box, pointing
     // out of the octagon.
-    v->codeAppendf("float2 refpt45 = (N[1].x < 0) ? %s.xy : %s.zw;",
+    v->codeAppendf("float2 refpt45 = (0 == ((sk_VertexID + 1) & (1 << 2))) ? %s.xy : %s.zw;",
                    proc.getInstanceAttrib(InstanceAttribs::kDevBounds45).fName,
                    proc.getInstanceAttrib(InstanceAttribs::kDevBounds45).fName);
     v->codeAppendf("refpt45 *= float2x2(.5,.5,-.5,.5);"); // transform back to device space.
@@ -176,35 +212,35 @@ void GLSLPathProcessor::onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) {
     v->codeAppendf("float2 atlascoord = octocoord + float2(%s);",
                    proc.getInstanceAttrib(InstanceAttribs::kAtlasOffset).fName);
     if (kTopLeft_GrSurfaceOrigin == proc.atlasProxy()->origin()) {
-        v->codeAppendf("%s = atlascoord * %s;", texcoord.vsOut(), atlasAdjust);
+        v->codeAppendf("%s.xy = atlascoord * %s;", texcoord.vsOut(), atlasAdjust);
     } else {
         SkASSERT(kBottomLeft_GrSurfaceOrigin == proc.atlasProxy()->origin());
-        v->codeAppendf("%s = float2(atlascoord.x * %s.x, 1 - atlascoord.y * %s.y);",
+        v->codeAppendf("%s.xy = float2(atlascoord.x * %s.x, 1 - atlascoord.y * %s.y);",
                        texcoord.vsOut(), atlasAdjust, atlasAdjust);
     }
+    // The third texture coordinate is -.5 for even-odd paths and +.5 for winding ones.
+    // ("right < left" indicates even-odd fill type.)
+    v->codeAppendf("%s.z = sign(devbounds.z - devbounds.x) * .5;", texcoord.vsOut());
 
-    // Convert to path/local cordinates.
-    v->codeAppendf("float2x2 viewmatrix = float2x2(%s.xy, %s.zw);", // float2x2(float4) busts Intel.
-                   proc.getInstanceAttrib(InstanceAttribs::kViewMatrix).fName,
-                   proc.getInstanceAttrib(InstanceAttribs::kViewMatrix).fName);
-    v->codeAppendf("float2 pathcoord = inverse(viewmatrix) * (octocoord - %s);",
-                   proc.getInstanceAttrib(InstanceAttribs::kViewTranslate).fName);
-
-    this->emitTransforms(v, varyingHandler, uniHandler, GrShaderVar("pathcoord", kFloat2_GrSLType),
-                         args.fFPCoordTransformHandler);
+    this->emitTransforms(v, varyingHandler, uniHandler, GrShaderVar("octocoord", kFloat2_GrSLType),
+                         proc.localMatrix(), args.fFPCoordTransformHandler);
 
     // Fragment shader.
-    GrGLSLPPFragmentBuilder* f = args.fFragBuilder;
+    GrGLSLFPFragmentBuilder* f = args.fFragBuilder;
 
-    f->codeAppend ("half coverage_count = ");
-    f->appendTextureLookup(args.fTexSamplers[0], texcoord.fsIn(), kFloat2_GrSLType);
+    // Look up coverage count in the atlas.
+    f->codeAppend ("half coverage = ");
+    f->appendTextureLookup(args.fTexSamplers[0], SkStringPrintf("%s.xy", texcoord.fsIn()).c_str(),
+                           kFloat2_GrSLType);
     f->codeAppend (".a;");
 
-    if (SkPath::kWinding_FillType == proc.fillType()) {
-        f->codeAppendf("%s = half4(min(abs(coverage_count), 1));", args.fOutputCoverage);
-    } else {
-        SkASSERT(SkPath::kEvenOdd_FillType == proc.fillType());
-        f->codeAppend ("half t = mod(abs(coverage_count), 2);");
-        f->codeAppendf("%s = half4(1 - abs(t - 1));", args.fOutputCoverage);
-    }
+    // Scale coverage count by .5. Make it negative for even-odd paths and positive for winding
+    // ones. Clamp winding coverage counts at 1.0 (i.e. min(coverage/2, .5)).
+    f->codeAppendf("coverage = min(abs(coverage) * %s.z, .5);", texcoord.fsIn());
+
+    // For negative values, this finishes the even-odd sawtooth function. Since positive (winding)
+    // values were clamped at "coverage/2 = .5", this only undoes the previous multiply by .5.
+    f->codeAppend ("coverage = 1 - abs(fract(coverage) * 2 - 1);");
+
+    f->codeAppendf("%s = half4(coverage);", args.fOutputCoverage);
 }

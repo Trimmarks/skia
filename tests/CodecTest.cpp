@@ -10,29 +10,46 @@
 #include "SkAndroidCodec.h"
 #include "SkAutoMalloc.h"
 #include "SkBitmap.h"
+#include "SkCanvas.h"
 #include "SkCodec.h"
 #include "SkCodecImageGenerator.h"
-#include "SkColorSpace_XYZ.h"
+#include "SkColor.h"
+#include "SkColorSpace.h"
 #include "SkColorSpacePriv.h"
 #include "SkData.h"
+#include "SkEncodedImageFormat.h"
 #include "SkFrontBufferedStream.h"
-#include "SkImageEncoder.h"
-#include "SkImageEncoderPriv.h"
-#include "SkMakeUnique.h"
-#include "SkMD5.h"
-#include "SkOSPath.h"
+#include "SkImage.h"
+#include "SkImageGenerator.h"
+#include "SkImageInfo.h"
 #include "SkJpegEncoder.h"
+#include "SkMD5.h"
+#include "SkMakeUnique.h"
+#include "SkMalloc.h"
+#include "SkMatrix44.h"
+#include "SkPixmap.h"
 #include "SkPngChunkReader.h"
 #include "SkPngEncoder.h"
 #include "SkRandom.h"
+#include "SkRect.h"
+#include "SkRefCnt.h"
+#include "SkSize.h"
 #include "SkStream.h"
 #include "SkStreamPriv.h"
+#include "SkString.h"
+#include "SkTemplates.h"
+#include "SkTypes.h"
+#include "SkUnPreMultiply.h"
 #include "SkWebpEncoder.h"
 #include "Test.h"
-
 #include "png.h"
-
 #include "sk_tool_utils.h"
+
+#include <setjmp.h>
+#include <cstring>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #if PNG_LIBPNG_VER_MAJOR == 1 && PNG_LIBPNG_VER_MINOR < 5
     // FIXME (scroggo): Google3 needs to be updated to use a newer version of libpng. In
@@ -621,14 +638,20 @@ DEF_TEST(Codec_Dimensions, r) {
 }
 
 static void test_invalid(skiatest::Reporter* r, const char path[]) {
-    std::unique_ptr<SkStream> stream(GetResourceAsStream(path));
-    if (!stream) {
+    auto data = GetResourceAsData(path);
+    if (!data) {
+        ERRORF(r, "Failed to get resource %s", path);
         return;
     }
-    REPORTER_ASSERT(r, !SkCodec::MakeFromStream(std::move(stream)));
+
+    REPORTER_ASSERT(r, !SkCodec::MakeFromData(data));
 }
 
 DEF_TEST(Codec_Empty, r) {
+    if (GetResourcePath().isEmpty()) {
+        return;
+    }
+
     // Test images that should not be able to create a codec
     test_invalid(r, "empty_images/zero-dims.gif");
     test_invalid(r, "empty_images/zero-embedded.ico");
@@ -648,6 +671,9 @@ DEF_TEST(Codec_Empty, r) {
     test_invalid(r, "empty_images/zero_height.tiff");
 #endif
     test_invalid(r, "invalid_images/b37623797.ico");
+    test_invalid(r, "invalid_images/osfuzz6295.webp");
+    test_invalid(r, "invalid_images/osfuzz6288.bmp");
+    test_invalid(r, "invalid_images/ossfuzz6347");
 }
 
 #ifdef PNG_READ_UNKNOWN_CHUNKS_SUPPORTED
@@ -994,8 +1020,7 @@ static void check_color_xform(skiatest::Reporter* r, const char* path) {
 
     const int dstWidth = subsetWidth / opts.fSampleSize;
     const int dstHeight = subsetHeight / opts.fSampleSize;
-    sk_sp<SkData> data = GetResourceAsData("icc_profiles/HP_ZR30w.icc");
-    sk_sp<SkColorSpace> colorSpace = SkColorSpace::MakeICC(data->data(), data->size());
+    auto colorSpace = SkColorSpace::MakeRGB(g2Dot2_TransferFn, SkColorSpace::kAdobeRGB_Gamut);
     SkImageInfo dstInfo = codec->getInfo().makeWH(dstWidth, dstHeight)
                                           .makeColorType(kN32_SkColorType)
                                           .makeColorSpace(colorSpace);
@@ -1118,22 +1143,22 @@ static void test_conversion_possible(skiatest::Reporter* r, const char* path,
     SkBitmap bm;
     bm.allocPixels(infoF16);
     SkCodec::Result result = codec->getPixels(infoF16, bm.getPixels(), bm.rowBytes());
-    REPORTER_ASSERT(r, SkCodec::kInvalidConversion == result);
+    REPORTER_ASSERT(r, SkCodec::kSuccess == result);
 
     result = codec->startScanlineDecode(infoF16);
     if (supportsScanlineDecoder) {
-        REPORTER_ASSERT(r, SkCodec::kInvalidConversion == result);
+        REPORTER_ASSERT(r, SkCodec::kSuccess == result);
     } else {
         REPORTER_ASSERT(r, SkCodec::kUnimplemented == result
-                        || SkCodec::kInvalidConversion == result);
+                        || SkCodec::kSuccess == result);
     }
 
     result = codec->startIncrementalDecode(infoF16, bm.getPixels(), bm.rowBytes());
     if (supportsIncrementalDecoder) {
-        REPORTER_ASSERT(r, SkCodec::kInvalidConversion == result);
+        REPORTER_ASSERT(r, SkCodec::kSuccess == result);
     } else {
         REPORTER_ASSERT(r, SkCodec::kUnimplemented == result
-                        || SkCodec::kInvalidConversion == result);
+                        || SkCodec::kSuccess == result);
     }
 
     infoF16 = infoF16.makeColorSpace(infoF16.colorSpace()->makeLinearGamma());
@@ -1519,4 +1544,74 @@ DEF_TEST(Codec_webp_rowsDecoded, r) {
     }
 
     test_info(r, codec.get(), codec->getInfo(), SkCodec::kInvalidInput, nullptr);
+}
+
+DEF_TEST(Codec_ossfuzz6274, r) {
+    if (GetResourcePath().isEmpty()) {
+        return;
+    }
+
+    const char* file = "invalid_images/ossfuzz6274.gif";
+    auto image = GetResourceAsImage(file);
+    if (!image) {
+        ERRORF(r, "Missing %s", file);
+        return;
+    }
+
+    REPORTER_ASSERT(r, image->width()  == 32);
+    REPORTER_ASSERT(r, image->height() == 32);
+
+    SkBitmap bm;
+    if (!bm.tryAllocPixels(SkImageInfo::MakeN32Premul(32, 32))) {
+        ERRORF(r, "Failed to allocate pixels");
+        return;
+    }
+
+    bm.eraseColor(SK_ColorTRANSPARENT);
+
+    SkCanvas canvas(bm);
+    canvas.drawImage(image, 0, 0, nullptr);
+
+    for (int i = 0; i < image->width();  ++i)
+    for (int j = 0; j < image->height(); ++j) {
+        SkColor actual = SkUnPreMultiply::PMColorToColor(*bm.getAddr32(i, j));
+        if (actual != SK_ColorTRANSPARENT) {
+            ERRORF(r, "did not initialize pixels! %i, %i is %x", i, j, actual);
+        }
+    }
+}
+
+DEF_TEST(Codec_crbug807324, r) {
+    if (GetResourcePath().isEmpty()) {
+        return;
+    }
+
+    const char* file = "images/crbug807324.png";
+    auto image = GetResourceAsImage(file);
+    if (!image) {
+        ERRORF(r, "Missing %s", file);
+        return;
+    }
+
+    const int kWidth = image->width();
+    const int kHeight = image->height();
+
+    SkBitmap bm;
+    if (!bm.tryAllocPixels(SkImageInfo::MakeN32Premul(kWidth, kHeight))) {
+        ERRORF(r, "Could not allocate pixels (%i x %i)", kWidth, kHeight);
+        return;
+    }
+
+    bm.eraseColor(SK_ColorTRANSPARENT);
+
+    SkCanvas canvas(bm);
+    canvas.drawImage(image, 0, 0, nullptr);
+
+    for (int i = 0; i < kWidth;  ++i)
+    for (int j = 0; j < kHeight; ++j) {
+        if (*bm.getAddr32(i, j) == SK_ColorTRANSPARENT) {
+            ERRORF(r, "image should not be transparent! %i, %i is 0", i, j);
+            return;
+        }
+    }
 }

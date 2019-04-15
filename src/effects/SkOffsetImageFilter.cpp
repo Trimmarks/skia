@@ -8,6 +8,7 @@
 #include "SkOffsetImageFilter.h"
 #include "SkColorSpaceXformer.h"
 #include "SkCanvas.h"
+#include "SkFlattenablePriv.h"
 #include "SkImageFilterPriv.h"
 #include "SkMatrix.h"
 #include "SkPaint.h"
@@ -44,13 +45,13 @@ sk_sp<SkSpecialImage> SkOffsetImageFilter::onFilterImage(SkSpecialImage* source,
     SkIPoint vec = map_offset_vector(ctx.ctm(), fOffset);
 
     if (!this->cropRectIsSet()) {
-        offset->fX = srcOffset.fX + vec.fX;
-        offset->fY = srcOffset.fY + vec.fY;
+        offset->fX = Sk32_sat_add(srcOffset.fX, vec.fX);
+        offset->fY = Sk32_sat_add(srcOffset.fY, vec.fY);
         return input;
     } else {
         SkIRect bounds;
-        SkIRect srcBounds = SkIRect::MakeWH(input->width(), input->height());
-        srcBounds.offset(srcOffset);
+        const SkIRect srcBounds = SkIRect::MakeXYWH(srcOffset.fX, srcOffset.fY,
+                                                    input->width(), input->height());
         if (!this->applyCropRect(ctx, srcBounds, &bounds)) {
             return nullptr;
         }
@@ -97,9 +98,9 @@ SkRect SkOffsetImageFilter::computeFastBounds(const SkRect& src) const {
 }
 
 SkIRect SkOffsetImageFilter::onFilterNodeBounds(const SkIRect& src, const SkMatrix& ctm,
-                                                MapDirection direction) const {
+                                                MapDirection dir, const SkIRect* inputRect) const {
     SkIPoint vec = map_offset_vector(ctm, fOffset);
-    if (kReverse_MapDirection == direction) {
+    if (kReverse_MapDirection == dir) {
         SkPointPriv::Negate(vec);
     }
 
@@ -125,7 +126,6 @@ SkOffsetImageFilter::SkOffsetImageFilter(SkScalar dx, SkScalar dy,
     fOffset.set(dx, dy);
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkOffsetImageFilter::toString(SkString* str) const {
     str->appendf("SkOffsetImageFilter: (");
     str->appendf("offset: (%f, %f) ", fOffset.fX, fOffset.fY);
@@ -135,4 +135,3 @@ void SkOffsetImageFilter::toString(SkString* str) const {
     }
     str->append("))");
 }
-#endif

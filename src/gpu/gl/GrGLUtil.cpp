@@ -99,7 +99,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
                        const char* versionString,
                        GrGLDriver* outDriver,
                        GrGLDriverVersion* outVersion) {
-    int major, minor, rev, driverMajor, driverMinor;
+    int major, minor, rev, driverMajor, driverMinor, driverPoint;
 
     *outDriver = kUnknown_GrGLDriver;
     *outVersion = GR_GL_DRIVER_UNKNOWN_VER;
@@ -128,7 +128,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
                            &major, &minor, &rev, &driverMajor, &driverMinor);
             // Some older NVIDIA drivers don't report the driver version.
             if (5 == n) {
-                *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor);
+                *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, 0);
             }
             return;
         }
@@ -140,7 +140,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
         }
         if (4 == n) {
             *outDriver = kMesa_GrGLDriver;
-            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor);
+            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, 0);
             return;
         }
     }
@@ -151,7 +151,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
                            &major, &minor, &driverMajor, &driverMinor);
             // Some older NVIDIA drivers don't report the driver version.
             if (4 == n) {
-                *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor);
+                *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, 0);
             }
             return;
         }
@@ -160,7 +160,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
                        &major, &minor, &driverMajor, &driverMinor);
         if (4 == n) {
             *outDriver = kMesa_GrGLDriver;
-            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor);
+            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, 0);
             return;
         }
         if (0 == strncmp("ANGLE", rendererString, 5)) {
@@ -168,7 +168,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
             n = sscanf(versionString, "OpenGL ES %d.%d (ANGLE %d.%d", &major, &minor, &driverMajor,
                                                                       &driverMinor);
             if (4 == n) {
-                *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor);
+                *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, 0);
             }
             return;
         }
@@ -177,6 +177,14 @@ void GrGLGetDriverInfo(GrGLStandard standard,
     if (kIntel_GrGLVendor == vendor) {
         // We presume we're on the Intel driver since it hasn't identified itself as Mesa.
         *outDriver = kIntel_GrGLDriver;
+
+        //This is how the macOS version strings are structured. This might be different on different
+        // OSes.
+        int n = sscanf(versionString, "%d.%d INTEL-%d.%d.%d", &major, &minor, &driverMajor,
+                       &driverMinor, &driverPoint);
+        if (5 == n) {
+            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, driverPoint);
+        }
     }
 
     if (kQualcomm_GrGLVendor == vendor) {
@@ -184,7 +192,7 @@ void GrGLGetDriverInfo(GrGLStandard standard,
         int n = sscanf(versionString, "OpenGL ES %d.%d V@%d.%d", &major, &minor, &driverMajor,
                        &driverMinor);
         if (4 == n) {
-            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor);
+            *outVersion = GR_GL_DRIVER_VER(driverMajor, driverMinor, 0);
         }
         return;
     }
@@ -284,12 +292,15 @@ static bool is_renderer_angle(const char* rendererString) {
     return 0 == strncmp(rendererString, kHeader, kHeaderLength);
 }
 
-GrGLRenderer GrGLGetRendererFromString(const char* rendererString) {
+GrGLRenderer GrGLGetRendererFromStrings(const char* rendererString,
+                                        const GrGLExtensions& extensions) {
     if (rendererString) {
-        if (0 == strcmp(rendererString, "NVIDIA Tegra 3")) {
-            return kTegra3_GrGLRenderer;
-        } else if (0 == strcmp(rendererString, "NVIDIA Tegra")) {
-            return kTegra2_GrGLRenderer;
+        static const char kTegraStr[] = "NVIDIA Tegra";
+        if (0 == strncmp(rendererString, kTegraStr, SK_ARRAY_COUNT(kTegraStr) - 1)) {
+            // Tegra strings are not very descriptive. We distinguish between the modern and legacy
+            // architectures by the presence of NV_path_rendering.
+            return extensions.has("GL_NV_path_rendering") ? kTegra_GrGLRenderer
+                                                          : kTegra_PreK1_GrGLRenderer;
         }
         int lastDigit;
         int n = sscanf(rendererString, "PowerVR SGX 54%d", &lastDigit);
@@ -339,16 +350,23 @@ GrGLRenderer GrGLGetRendererFromString(const char* rendererString) {
         }
 
         int intelNumber;
-        n = sscanf(rendererString, "Intel(R) Iris(TM) Graphics %d", &intelNumber);
-        if (1 != n) {
-            n = sscanf(rendererString, "Intel(R) HD Graphics %d", &intelNumber);
-        }
-        if (1 == n) {
+        if (sscanf(rendererString, "Intel(R) Iris(TM) Graphics %d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) Iris(TM) Pro Graphics %d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) Iris(TM) Pro Graphics P%d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) Iris(R) Graphics %d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) Iris(R) Pro Graphics %d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) Iris(R) Pro Graphics P%d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) HD Graphics %d", &intelNumber) ||
+            sscanf(rendererString, "Intel(R) HD Graphics P%d", &intelNumber)) {
+
             if (intelNumber >= 4000 && intelNumber < 5000) {
                 return kIntel4xxx_GrGLRenderer;
             }
             if (intelNumber >= 6000 && intelNumber < 7000) {
                 return kIntel6xxx_GrGLRenderer;
+            }
+            if (intelNumber >= 500 && intelNumber < 600) {
+                return kIntelSkylake_GrGLRenderer;
             }
         }
 
@@ -380,6 +398,11 @@ GrGLRenderer GrGLGetRendererFromString(const char* rendererString) {
         if (0 == strncmp(rendererString, kMaliTStr, SK_ARRAY_COUNT(kMaliTStr) - 1)) {
             return kMaliT_GrGLRenderer;
         }
+        int mali400Num;
+        if (1 == sscanf(rendererString, "Mali-%d", &mali400Num) && mali400Num >= 400 &&
+            mali400Num < 500) {
+            return kMali4xx_GrGLRenderer;
+        }
         if (is_renderer_angle(rendererString)) {
             return kANGLE_GrGLRenderer;
         }
@@ -397,9 +420,37 @@ void GrGLGetANGLEInfoFromString(const char* rendererString, GrGLANGLEBackend* ba
     }
     if (strstr(rendererString, "Intel")) {
         *vendor = GrGLANGLEVendor::kIntel;
-    }
-    if (strstr(rendererString, "HD Graphics 4000") || strstr(rendererString, "HD Graphics 2500")) {
-        *renderer = GrGLANGLERenderer::kIvyBridge;
+
+        const char* modelStr;
+        int modelNumber;
+        if ((modelStr = strstr(rendererString, "HD Graphics")) &&
+            (1 == sscanf(modelStr, "HD Graphics %i", &modelNumber) ||
+             1 == sscanf(modelStr, "HD Graphics P%i", &modelNumber))) {
+            switch (modelNumber) {
+                case 4000:
+                case 2500:
+                    *renderer = GrGLANGLERenderer::kIvyBridge;
+                    break;
+                case 510:
+                case 515:
+                case 520:
+                case 530:
+                    *renderer = GrGLANGLERenderer::kSkylake;
+                    break;
+            }
+        } else if ((modelStr = strstr(rendererString, "Iris")) &&
+                   (1 == sscanf(modelStr, "Iris(TM) Graphics %i", &modelNumber) ||
+                    1 == sscanf(modelStr, "Iris(TM) Pro Graphics %i", &modelNumber) ||
+                    1 == sscanf(modelStr, "Iris(TM) Pro Graphics P%i", &modelNumber))) {
+            switch (modelNumber) {
+                case 540:
+                case 550:
+                case 555:
+                case 580:
+                    *renderer = GrGLANGLERenderer::kSkylake;
+                    break;
+            }
+        }
     }
     if (strstr(rendererString, "Direct3D11")) {
         *backend = GrGLANGLEBackend::kD3D11;
@@ -429,9 +480,10 @@ GrGLVendor GrGLGetVendor(const GrGLInterface* gl) {
 }
 
 GrGLRenderer GrGLGetRenderer(const GrGLInterface* gl) {
-    const GrGLubyte* v;
-    GR_GL_CALL_RET(gl, v, GetString(GR_GL_RENDERER));
-    return GrGLGetRendererFromString((const char*) v);
+    const GrGLubyte* rendererString;
+    GR_GL_CALL_RET(gl, rendererString, GetString(GR_GL_RENDERER));
+
+    return GrGLGetRendererFromStrings((const char*)rendererString, gl->fExtensions);
 }
 
 GrGLenum GrToGLStencilFunc(GrStencilTest test) {
@@ -466,18 +518,20 @@ GrPixelConfig GrGLSizedFormatToPixelConfig(GrGLenum sizedFormat) {
             return kAlpha_8_as_Alpha_GrPixelConfig;
         case GR_GL_RGBA8:
             return kRGBA_8888_GrPixelConfig;
+        case GR_GL_RGB8:
+            return kRGB_888_GrPixelConfig;
         case GR_GL_BGRA8:
             return kBGRA_8888_GrPixelConfig;
         case GR_GL_SRGB8_ALPHA8:
             return kSRGBA_8888_GrPixelConfig;
-        case GR_GL_RGBA8I:
-            return kRGBA_8888_sint_GrPixelConfig;
         case GR_GL_RGB565:
             return kRGB_565_GrPixelConfig;
         case GR_GL_RGB5:
             return kRGB_565_GrPixelConfig;
         case GR_GL_RGBA4:
             return kRGBA_4444_GrPixelConfig;
+        case GR_GL_RGB10_A2:
+            return kRGBA_1010102_GrPixelConfig;
         case GR_GL_LUMINANCE8:
             return kGray_8_GrPixelConfig;
         case GR_GL_RGBA32F:

@@ -94,20 +94,9 @@ SK_API extern void sk_abort_no_print(void);
     #define SkAssertResult(cond)         if (cond) {} do {} while(false)
 #endif
 
-#ifdef SK_IGNORE_TO_STRING
-    #define SK_TO_STRING_NONVIRT()
-    #define SK_TO_STRING_VIRT()
-    #define SK_TO_STRING_PUREVIRT()
-    #define SK_TO_STRING_OVERRIDE()
-#else
-    class SkString;
-    // the 'toString' helper functions convert Sk* objects to human-readable
-    // form in developer mode
-    #define SK_TO_STRING_NONVIRT() void toString(SkString* str) const;
-    #define SK_TO_STRING_VIRT() virtual void toString(SkString* str) const;
-    #define SK_TO_STRING_PUREVIRT() virtual void toString(SkString* str) const = 0;
-    #define SK_TO_STRING_OVERRIDE() void toString(SkString* str) const override;
-#endif
+// some clients (e.g. third_party/WebKit/Source/platform/fonts/FontCustomPlatformData.h)
+// depend on SkString forward declaration below. Remove this once dependencies are fixed.
+class SkString;
 
 /*
  *  Usage:  SK_MACRO_CONCAT(a, b)   to construct the symbol ab
@@ -212,6 +201,8 @@ template <typename D, typename S> constexpr D SkTo(S s) {
 #define SK_MinU32   0
 #define SK_NaN32    ((int) (1U << 31))
 #define SK_MaxSizeT SIZE_MAX
+static constexpr int64_t SK_MaxS64 = 0x7FFFFFFFFFFFFFFF;
+static constexpr int64_t SK_MinS64 = -SK_MaxS64;
 
 static inline int32_t SkLeftShift(int32_t value, int32_t shift) {
     return (int32_t) ((uint32_t) value << shift);

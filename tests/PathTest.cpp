@@ -987,13 +987,13 @@ static void test_poly(skiatest::Reporter* reporter, const SkPath& path,
                 srcPts++;
                 break;
             case SkPath::kQuad_Verb:
-                REPORTER_ASSERT_MESSAGE(reporter, false, "unexpected quad verb");
+                REPORTER_ASSERT(reporter, false, "unexpected quad verb");
                 break;
             case SkPath::kConic_Verb:
-                REPORTER_ASSERT_MESSAGE(reporter, false, "unexpected conic verb");
+                REPORTER_ASSERT(reporter, false, "unexpected conic verb");
                 break;
             case SkPath::kCubic_Verb:
-                REPORTER_ASSERT_MESSAGE(reporter, false, "unexpected cubic verb");
+                REPORTER_ASSERT(reporter, false, "unexpected cubic verb");
                 break;
             case SkPath::kClose_Verb:
                 REPORTER_ASSERT(reporter, !firstTime);
@@ -2033,7 +2033,7 @@ static void test_isRect(skiatest::Reporter* reporter) {
         { c3, SK_ARRAY_COUNT(c3), false, true },
 
         { d1, SK_ARRAY_COUNT(d1), false, false },
-        { d2, SK_ARRAY_COUNT(d2), false, false },
+        { d2, SK_ARRAY_COUNT(d2), false, true },
         { d3, SK_ARRAY_COUNT(d3), false, false },
     };
 
@@ -2055,7 +2055,8 @@ static void test_isRect(skiatest::Reporter* reporter) {
             bool isClosed;
             SkPath::Direction direction;
             SkPathPriv::FirstDirection cheapDirection;
-            expected.set(tests[testIndex].fPoints, tests[testIndex].fPointCount);
+            int pointCount = tests[testIndex].fPointCount - (d2 == tests[testIndex].fPoints);
+            expected.set(tests[testIndex].fPoints, pointCount);
             REPORTER_ASSERT(reporter, SkPathPriv::CheapComputeFirstDirection(path, &cheapDirection));
             REPORTER_ASSERT(reporter, path.isRect(&computed, &isClosed, &direction));
             REPORTER_ASSERT(reporter, expected == computed);
@@ -2508,14 +2509,16 @@ static void write_and_read_back(skiatest::Reporter* reporter,
     SkPath::Direction dir0, dir1;
     unsigned start0, start1;
     REPORTER_ASSERT(reporter, readBack.isOval(nullptr) == p.isOval(nullptr));
-    if (p.isOval(&oval0, &dir0, &start0) && readBack.isOval(&oval1, &dir1, &start1)) {
+    if (SkPathPriv::IsOval(p, &oval0, &dir0, &start0) &&
+        SkPathPriv::IsOval(readBack, &oval1, &dir1, &start1)) {
         REPORTER_ASSERT(reporter, oval0 == oval1);
         REPORTER_ASSERT(reporter, dir0 == dir1);
         REPORTER_ASSERT(reporter, start0 == start1);
     }
     REPORTER_ASSERT(reporter, readBack.isRRect(nullptr) == p.isRRect(nullptr));
     SkRRect rrect0, rrect1;
-    if (p.isRRect(&rrect0, &dir0, &start0) && readBack.isRRect(&rrect1, &dir1, &start1)) {
+    if (SkPathPriv::IsRRect(p, &rrect0, &dir0, &start0) &&
+        SkPathPriv::IsRRect(readBack, &rrect1, &dir1, &start1)) {
         REPORTER_ASSERT(reporter, rrect0 == rrect1);
         REPORTER_ASSERT(reporter, dir0 == dir1);
         REPORTER_ASSERT(reporter, start0 == start1);
@@ -2524,100 +2527,6 @@ static void write_and_read_back(skiatest::Reporter* reporter,
     const SkRect& readBackBounds = readBack.getBounds();
 
     REPORTER_ASSERT(reporter, origBounds == readBackBounds);
-}
-
-static void test_corrupt_flattening(skiatest::Reporter* reporter) {
-    SkPath path;
-    path.moveTo(1, 2);
-    path.lineTo(3, 2);
-    path.quadTo(4, 2, 5, 4);
-    path.conicTo(5, 6, 3, 7, 0.5f);
-    path.cubicTo(2, 6, 2, 4, 4, 1);
-    uint8_t buffer[1024];
-
-    // Make sure these properties are computed prior to serialization.
-    SkPathPriv::FirstDirection dir;
-    SkAssertResult(SkPathPriv::CheapComputeFirstDirection(path, &dir));
-    bool isConvex = path.isConvex();
-
-    SkDEBUGCODE(size_t size =) path.writeToMemory(buffer);
-    SkASSERT(size <= sizeof(buffer));
-
-    // find where the counts and verbs are stored : from the impl in SkPathRef.cpp
-    int32_t* vCount = (int32_t*)&buffer[16];
-    SkASSERT(*vCount == 5);
-    int32_t* pCount = (int32_t*)&buffer[20];
-    SkASSERT(*pCount == 9);
-    int32_t* cCount = (int32_t*)&buffer[24];
-    SkASSERT(*cCount == 1);
-    uint8_t* verbs = &buffer[28];
-
-    REPORTER_ASSERT(reporter, path.readFromMemory(buffer, sizeof(buffer)));
-
-    // check that we detect under/over-flow of counts
-
-    *vCount += 1;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    *vCount -= 1;   // restore
-
-    *pCount += 1;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    *pCount -= 2;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    *pCount += 1;   // restore
-
-    *cCount += 1;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    *cCount -= 2;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    *cCount += 1;   // restore
-
-    // Check that we detect when the verbs indicate more or fewer pts/conics
-
-    uint8_t save = verbs[0];
-    SkASSERT(save == SkPath::kCubic_Verb);
-    verbs[0] = SkPath::kQuad_Verb;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    verbs[0] = save;
-
-    save = verbs[1];
-    SkASSERT(save == SkPath::kConic_Verb);
-    verbs[1] = SkPath::kQuad_Verb;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    verbs[1] = SkPath::kCubic_Verb;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    verbs[1] = save;
-
-    // Check that we detect invalid verbs
-    save = verbs[1];
-    verbs[1] = 17;
-    REPORTER_ASSERT(reporter, !path.readFromMemory(buffer, sizeof(buffer)));
-    verbs[1] = save;
-
-    // kConvexity_SerializationShift defined privately in SkPath.h
-    static constexpr int32_t kConvexityMask = 0x7 << 16;
-    int32_t* packed = (int32_t*)buffer;
-    int32_t savedPacked = *packed;
-    SkPath::Convexity wrongConvexity =
-            isConvex ? SkPath::kConcave_Convexity : SkPath::kConvex_Convexity;
-    *packed = (savedPacked & ~kConvexityMask) | (wrongConvexity << 16);
-    REPORTER_ASSERT(reporter, path.readFromMemory(buffer, sizeof(buffer)));
-    // We should ignore the stored convexity and recompute from the deserialized data.
-    REPORTER_ASSERT(reporter, path.isConvex() == isConvex);
-    *packed = savedPacked;
-
-    // kDirection_SerializationShift defined privately in SkPath.h
-    static constexpr int32_t kDirectionMask = 0x3 << 26;
-    SkPathPriv::FirstDirection wrongDir = (dir == SkPathPriv::kCW_FirstDirection)
-                                                  ? SkPathPriv::kCCW_FirstDirection
-                                                  : SkPathPriv::kCW_FirstDirection;
-    *packed = (savedPacked & ~kDirectionMask) | (wrongDir << 26);
-    REPORTER_ASSERT(reporter, path.readFromMemory(buffer, sizeof(buffer)));
-    // We should ignore the stored direction and recompute from the deserialized data.
-    SkPathPriv::FirstDirection newDir;
-    SkAssertResult(SkPathPriv::CheapComputeFirstDirection(path, &newDir));
-    REPORTER_ASSERT(reporter, newDir == dir);
-    *packed = savedPacked;
 }
 
 static void test_flattening(skiatest::Reporter* reporter) {
@@ -2668,8 +2577,6 @@ static void test_flattening(skiatest::Reporter* reporter) {
 
         write_and_read_back(reporter, oval);
     }
-
-    test_corrupt_flattening(reporter);
 }
 
 static void test_transform(skiatest::Reporter* reporter) {
@@ -3291,7 +3198,7 @@ static void check_for_circle(skiatest::Reporter* reporter,
     REPORTER_ASSERT(reporter, path.isOval(&rect) == expectedCircle);
     SkPath::Direction isOvalDir;
     unsigned isOvalStart;
-    if (path.isOval(&rect, &isOvalDir, &isOvalStart)) {
+    if (SkPathPriv::IsOval(path, &rect, &isOvalDir, &isOvalStart)) {
         REPORTER_ASSERT(reporter, rect.height() == rect.width());
         REPORTER_ASSERT(reporter, SkPathPriv::AsFirstDirection(isOvalDir) == expectedDir);
         SkPath tmpPath;
@@ -3534,7 +3441,7 @@ static void test_oval(skiatest::Reporter* reporter) {
     path.transform(m, &tmp);
     // an oval rotated 90 degrees is still an oval. The start index changes from 1 to 2. Direction
     // is unchanged.
-    REPORTER_ASSERT(reporter, tmp.isOval(nullptr, &dir, &start));
+    REPORTER_ASSERT(reporter, SkPathPriv::IsOval(tmp, nullptr, &dir, &start));
     REPORTER_ASSERT(reporter, 2 == start);
     REPORTER_ASSERT(reporter, SkPath::kCW_Direction == dir);
 
@@ -3574,7 +3481,7 @@ static void test_oval(skiatest::Reporter* reporter) {
     tmp.reset();
     tmp.addOval(rect);
     path = tmp;
-    REPORTER_ASSERT(reporter, path.isOval(nullptr, &dir, &start));
+    REPORTER_ASSERT(reporter, SkPathPriv::IsOval(path, nullptr, &dir, &start));
     REPORTER_ASSERT(reporter, SkPath::kCW_Direction == dir);
     REPORTER_ASSERT(reporter, 1 == start);
 }
@@ -3739,7 +3646,7 @@ static void check_oval_arc(skiatest::Reporter* reporter, SkScalar start, SkScala
     SkRect r = SkRect::MakeEmpty();
     SkPath::Direction d = SkPath::kCCW_Direction;
     unsigned s = ~0U;
-    bool isOval = path.isOval(&r, &d, &s);
+    bool isOval = SkPathPriv::IsOval(path, &r, &d, &s);
     REPORTER_ASSERT(reporter, isOval);
     SkPath recreatedPath;
     recreatedPath.addOval(r, d, s);
@@ -4466,7 +4373,6 @@ static void test_fuzz_crbug_662730(skiatest::Reporter* reporter) {
     test_draw_AA_path(100, 100, path);
 }
 
-#if !defined(SK_SUPPORT_LEGACY_DELTA_AA)
 static void test_skbug_6947() {
     SkPath path;
     SkPoint points[] =
@@ -4525,8 +4431,6 @@ static void test_skbug_7051() {
     path.close();
     test_draw_AA_path(100, 100, path);
 }
-
-#endif
 
 static void test_interp(skiatest::Reporter* reporter) {
     SkPath p1, p2, out;
@@ -4872,29 +4776,6 @@ DEF_TEST(PathRefSerialization, reporter) {
         REPORTER_ASSERT(reporter, readBack == path);
     }
 
-    // uint32_t[] offset into serialized path.
-    const size_t verbCountOffset = 4;
-    const size_t pointCountOffset = 5;
-    const size_t conicCountOffset = 6;
-
-    // Verify that this test is changing the right values.
-    const int* writtenValues = static_cast<const int*>(data->data());
-    REPORTER_ASSERT(reporter, writtenValues[verbCountOffset] == numVerbs);
-    REPORTER_ASSERT(reporter, writtenValues[pointCountOffset] == numPoints);
-    REPORTER_ASSERT(reporter, writtenValues[conicCountOffset] == numConics);
-
-    // Too many verbs, points, or conics fails to deserialize silently.
-    const int tooManyObjects = INT_MAX;
-    size_t offsets[] = {verbCountOffset, pointCountOffset, conicCountOffset};
-    for (size_t i = 0; i < 3; ++i) {
-        SkAutoMalloc storage_copy(bytesWritten);
-        memcpy(storage_copy.get(), data->data(), bytesWritten);
-        static_cast<int*>(storage_copy.get())[offsets[i]] = tooManyObjects;
-        SkPath readBack;
-        size_t bytesRead = readBack.readFromMemory(storage_copy.get(), bytesWritten);
-        REPORTER_ASSERT(reporter, !bytesRead);
-    }
-
     // One less byte (rounded down to alignment) than was written will also
     // fail to be deserialized.
     {
@@ -4949,3 +4830,239 @@ DEF_TEST(AndroidArc, reporter) {
     }
 }
 #endif
+
+/*
+ *  Try a range of crazy values, just to ensure that we don't assert/crash.
+ */
+DEF_TEST(HugeGeometry, reporter) {
+    auto surf = SkSurface::MakeRasterN32Premul(100, 100);
+    auto canvas = surf->getCanvas();
+
+    const bool aas[] = { false, true };
+    const SkPaint::Style styles[] = {
+        SkPaint::kFill_Style, SkPaint::kStroke_Style, SkPaint::kStrokeAndFill_Style
+    };
+    const SkScalar values[] = {
+        0, 1, 1000, 1000 * 1000, 1000.f * 1000 * 10000, SK_ScalarMax / 2, SK_ScalarMax,
+        SK_ScalarInfinity
+    };
+
+    SkPaint paint;
+    for (auto x : values) {
+        SkRect r = { -x, -x, x, x };
+        for (auto width : values) {
+            paint.setStrokeWidth(width);
+            for (auto aa : aas) {
+                paint.setAntiAlias(aa);
+                for (auto style : styles) {
+                    paint.setStyle(style);
+                    canvas->drawRect(r, paint);
+                    canvas->drawOval(r, paint);
+                }
+            }
+        }
+    }
+
+}
+
+// Treat nonfinite paths as "empty" or "full", depending on inverse-filltype
+DEF_TEST(ClipPath_nonfinite, reporter) {
+    auto surf = SkSurface::MakeRasterN32Premul(10, 10);
+    SkCanvas* canvas = surf->getCanvas();
+
+    REPORTER_ASSERT(reporter, !canvas->isClipEmpty());
+    for (bool aa : {false, true}) {
+        for (SkPath::FillType ft : {SkPath::kWinding_FillType, SkPath::kInverseWinding_FillType}) {
+            for (SkScalar bad : {SK_ScalarInfinity, SK_ScalarNaN}) {
+                for (int bits = 1; bits <= 15; ++bits) {
+                    SkPoint p0 = { 0, 0 };
+                    SkPoint p1 = { 0, 0 };
+                    if (bits & 1) p0.fX = -bad;
+                    if (bits & 2) p0.fY = -bad;
+                    if (bits & 4) p1.fX = bad;
+                    if (bits & 8) p1.fY = bad;
+
+                    SkPath path;
+                    path.moveTo(p0);
+                    path.lineTo(p1);
+                    path.setFillType(ft);
+                    canvas->save();
+                    canvas->clipPath(path, aa);
+                    REPORTER_ASSERT(reporter, canvas->isClipEmpty() == !path.isInverseFillType());
+                    canvas->restore();
+                }
+            }
+        }
+    }
+    REPORTER_ASSERT(reporter, !canvas->isClipEmpty());
+}
+
+// skbug.com/7792
+DEF_TEST(Path_isRect, reporter) {
+    auto makePath = [](const SkPoint* points, size_t count, bool close) -> SkPath {
+        SkPath path;
+        for (size_t index = 0; index < count; ++index) {
+            index < 2 ? path.moveTo(points[index]) : path.lineTo(points[index]);
+        }
+        if (close) {
+            path.close();
+        }
+        return path;
+    };
+    auto makePath2 = [](const SkPoint* points, const SkPath::Verb* verbs, size_t count) -> SkPath {
+        SkPath path;
+        for (size_t index = 0; index < count; ++index) {
+            switch (verbs[index]) {
+                case SkPath::kMove_Verb:
+                    path.moveTo(*points++);
+                    break;
+                case SkPath::kLine_Verb:
+                    path.lineTo(*points++);
+                    break;
+                case SkPath::kClose_Verb:
+                    path.close();
+                    break;
+                default:
+                    SkASSERT(0);
+            }
+        }
+        return path;
+    };
+    // isolated from skbug.com/7792 (bug description)
+    SkRect rect;
+    SkPoint points[] = { {10, 10}, {75, 75}, {150, 75}, {150, 150}, {75, 150} };
+    SkPath path = makePath(points, SK_ARRAY_COUNT(points), false);
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    SkRect compare;
+    compare.set(&points[1], SK_ARRAY_COUNT(points) - 1);
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c3
+    SkPoint points3[] = { {75, 50}, {100, 75}, {150, 75}, {150, 150}, {75, 150}, {75, 50} };
+    path = makePath(points3, SK_ARRAY_COUNT(points3), true);
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from skbug.com/7792#c9
+    SkPoint points9[] = { {10, 10}, {75, 75}, {150, 75}, {150, 150}, {75, 150} };
+    path = makePath(points9, SK_ARRAY_COUNT(points9), true);
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points9[1], SK_ARRAY_COUNT(points9) - 1);
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c11
+    SkPath::Verb verbs11[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kMove_Verb };
+    SkPoint points11[] = { {75, 150}, {75, 75}, {150, 75}, {150, 150}, {75, 150}, {75, 150} };
+    path = makePath2(points11, verbs11, SK_ARRAY_COUNT(verbs11));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points11[0], SK_ARRAY_COUNT(points11));
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c14
+    SkPath::Verb verbs14[] = { SkPath::kMove_Verb, SkPath::kMove_Verb, SkPath::kMove_Verb,
+                               SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kClose_Verb,
+                               SkPath::kLine_Verb, SkPath::kClose_Verb };
+    SkPoint points14[] = { {250, 75}, {250, 75}, {250, 75}, {100, 75},
+                           {150, 75}, {150, 150}, {75, 150}, {75, 75}, {0, 0} };
+    path = makePath2(points14, verbs14, SK_ARRAY_COUNT(verbs14));
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from skbug.com/7792#c15
+    SkPath::Verb verbs15[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kMove_Verb };
+    SkPoint points15[] = { {75, 75}, {150, 75}, {150, 150}, {75, 150}, {250, 75} };
+    path = makePath2(points15, verbs15, SK_ARRAY_COUNT(verbs15));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points15[0], SK_ARRAY_COUNT(points15) - 1);
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c17
+    SkPoint points17[] = { {75, 10}, {75, 75}, {150, 75}, {150, 150}, {75, 150}, {75, 10} };
+    path = makePath(points17, SK_ARRAY_COUNT(points17), true);
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from skbug.com/7792#c19
+    SkPath::Verb verbs19[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kClose_Verb, SkPath::kMove_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb };
+    SkPoint points19[] = { {75, 75}, {75, 75}, {75, 75}, {75, 75}, {150, 75}, {150, 150},
+                           {75, 150}, {10, 10}, {30, 10}, {10, 30} };
+    path = makePath2(points19, verbs19, SK_ARRAY_COUNT(verbs19));
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from skbug.com/7792#c23
+    SkPath::Verb verbs23[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kMove_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kClose_Verb };
+    SkPoint points23[] = { {75, 75}, {75, 75}, {75, 75}, {75, 75}, {150, 75}, {150, 150},
+                           {75, 150} };
+    path = makePath2(points23, verbs23, SK_ARRAY_COUNT(verbs23));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points23[0], SK_ARRAY_COUNT(points23));
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c29
+    SkPath::Verb verbs29[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kMove_Verb,
+                               SkPath::kClose_Verb };
+    SkPoint points29[] = { {75, 75}, {150, 75}, {150, 150}, {75, 150}, {75, 250}, {75, 75} };
+    path = makePath2(points29, verbs29, SK_ARRAY_COUNT(verbs29));
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from skbug.com/7792#c31
+    SkPath::Verb verbs31[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kMove_Verb,
+                               SkPath::kClose_Verb };
+    SkPoint points31[] = { {75, 75}, {150, 75}, {150, 150}, {75, 150}, {75, 10}, {75, 75} };
+    path = makePath2(points31, verbs31, SK_ARRAY_COUNT(verbs31));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points31[0], 4);
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c36
+    SkPath::Verb verbs36[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kMove_Verb, SkPath::kLine_Verb  };
+    SkPoint points36[] = { {75, 75}, {150, 75}, {150, 150}, {10, 150}, {75, 75}, {75, 75} };
+    path = makePath2(points36, verbs36, SK_ARRAY_COUNT(verbs36));
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from skbug.com/7792#c39
+    SkPath::Verb verbs39[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb };
+    SkPoint points39[] = { {150, 75}, {150, 150}, {75, 150}, {75, 100} };
+    path = makePath2(points39, verbs39, SK_ARRAY_COUNT(verbs39));
+    REPORTER_ASSERT(reporter, !path.isRect(&rect));
+    // isolated from zero_length_paths_aa
+    SkPath::Verb verbsAA[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kClose_Verb };
+    SkPoint pointsAA[] = { {32, 9.5f}, {32, 9.5f}, {32, 17}, {17, 17}, {17, 9.5f}, {17, 2},
+                           {32, 2} };
+    path = makePath2(pointsAA, verbsAA, SK_ARRAY_COUNT(verbsAA));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&pointsAA[0], SK_ARRAY_COUNT(pointsAA));
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c41
+    SkPath::Verb verbs41[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kMove_Verb,
+                               SkPath::kClose_Verb };
+    SkPoint points41[] = { {75, 75}, {150, 75}, {150, 150}, {140, 150}, {140, 75}, {75, 75} };
+    path = makePath2(points41, verbs41, SK_ARRAY_COUNT(verbs41));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points41[1], 4);
+    REPORTER_ASSERT(reporter, rect == compare);
+    // isolated from skbug.com/7792#c53
+    SkPath::Verb verbs53[] = { SkPath::kMove_Verb, SkPath::kLine_Verb, SkPath::kLine_Verb,
+                               SkPath::kLine_Verb, SkPath::kLine_Verb, SkPath::kMove_Verb,
+                               SkPath::kClose_Verb };
+    SkPoint points53[] = { {75, 75}, {150, 75}, {150, 150}, {140, 150}, {140, 75}, {75, 75} };
+    path = makePath2(points53, verbs53, SK_ARRAY_COUNT(verbs53));
+    REPORTER_ASSERT(reporter, path.isRect(&rect));
+    compare.set(&points53[1], 4);
+    REPORTER_ASSERT(reporter, rect == compare);
+}
+
+#include "SkVertices.h"
+DEF_TEST(triangle_onehalf, reporter) {
+    auto surface(SkSurface::MakeRasterN32Premul(100, 100));
+
+    const SkPoint pts[] = {
+        {  0.499069244f, 9.63295173f },
+        {  0.499402374f, 7.88207579f },
+        { 10.2363272f,   0.49999997f }
+    };
+    const SkColor colors[] = { SK_ColorBLACK, SK_ColorBLACK, SK_ColorBLACK };
+
+    auto v = SkVertices::MakeCopy(SkVertices::kTriangles_VertexMode, 3, pts, nullptr, colors);
+    surface->getCanvas()->drawVertices(v, SkBlendMode::kSrcOver, SkPaint());
+}

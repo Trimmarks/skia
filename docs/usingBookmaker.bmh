@@ -15,7 +15,7 @@ How to use the Bookmaker utility.
 
 #Subtopic Broken_Build
 
-If the 
+If the
 #A Housekeeper-PerCommit-Bookmaker # https://status.skia.org/repo/skia?filter=search&search_value=Housekeeper-PerCommit-Bookmaker ##
  bot is red, the bot has detected that the files in docs and include/core differ.
 
@@ -32,13 +32,19 @@ documentation to be deprecated as well.
 #Code
 ###$
 #Method void someMethodThatIsNowDeprecated()
-
 #Deprecated
 ##
+$$
 
-##
+Use
+
+$Code
+##Deprecated soon
+$$
+
+if the change is soon to be deprecated.
+
 $$$#
-##
 
 To regenerate the documentation, follow the Installing and Regenerate steps below.
 
@@ -132,11 +138,11 @@ $ ninja -C out/dir bookmaker
 Complete rebuilding of all bookmaker output looks like:
 
 #Code
-$ ./out/skia/bookmaker.exe -a docs/status.json -e fiddle.json
-$ ~/go/bin/fiddlecli.exe --input fiddle.json --output fiddleout.json
-$ ./out/skia/bookmaker.exe -a docs/status.json -f fiddleout.json -r site/user/api -c
-$ ./out/skia/bookmaker.exe -a docs/status.json -x
-$ ./out/skia/bookmaker.exe -a docs/status.json -p
+$ ./out/skia/bookmaker -a docs/status.json -e fiddle.json
+$ ~/go/bin/fiddlecli --input fiddle.json --output fiddleout.json
+$ ./out/skia/bookmaker -a docs/status.json -f fiddleout.json -r site/user/api -c
+$ ./out/skia/bookmaker -a docs/status.json -x
+$ ./out/skia/bookmaker -a docs/status.json -p
 ##
 
 #Subtopic Regenerate ##
@@ -284,7 +290,7 @@ any of the above commands with -a docs/status.json in place of
 #Subtopic Bugs
 
 Bookmaker bugs are tracked
-#A here # bug.skia.org/6898 ##
+#A here # https://bug.skia.org/6898 ##
 .
 
 ##

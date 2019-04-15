@@ -56,11 +56,13 @@ public:
 
     GrTextureOpList* asTextureOpList() override { return this; }
 
-    SkDEBUGCODE(void dump() const override;)
+    SkDEBUGCODE(void dump(bool printDependencies) const override;)
 
     SkDEBUGCODE(int numOps() const override { return fRecordedOps.count(); })
 
 private:
+    void purgeOpsWithUninstantiatedProxies() override;
+
     void gatherProxyIntervals(GrResourceAllocator*) const override;
 
     void recordOp(std::unique_ptr<GrOp>);

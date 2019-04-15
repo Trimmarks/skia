@@ -279,7 +279,9 @@ int SkUTF16_CountUnichars(const void* text, size_t byteLength) {
                 return -1;
             }
             c = *src++;
-            SkASSERT(SkUTF16_IsLowSurrogate(c));
+            if (!SkUTF16_IsLowSurrogate(c)) {
+                return -1;
+            }
         }
         count += 1;
     }
@@ -370,12 +372,6 @@ size_t SkUTF16_ToUTF8(const uint16_t utf16[], int numberOf16BitValues,
     return size;
 }
 
-const char SkHexadecimalDigits::gUpper[16] =
-           { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
-const char SkHexadecimalDigits::gLower[16] =
-           { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
-
-
 // returns -1 on error
 int SkUTF32_CountUnichars(const void* text, size_t byteLength) {
     if (byteLength == 0) {
@@ -396,3 +392,25 @@ int SkUTF32_CountUnichars(const void* text, size_t byteLength) {
     return SkToInt(byteLength >> 2);
 }
 
+// returns -1 on error
+int SkUTFN_CountUnichars(
+    SkTypeface::Encoding encoding, const void* utfN, size_t byteLength) {
+    SkASSERT(utfN != nullptr);
+    switch (encoding) {
+        case SkTypeface::kUTF8_Encoding:
+            return SkUTF8_CountUnichars(utfN, byteLength);
+        case SkTypeface::kUTF16_Encoding:
+            return SkUTF16_CountUnichars(utfN, byteLength);
+        case SkTypeface::kUTF32_Encoding:
+            return SkUTF32_CountUnichars(utfN, byteLength);
+        default:
+            SkDEBUGFAIL("unknown text encoding");
+    }
+
+    return -1;
+}
+
+const char SkHexadecimalDigits::gUpper[16] =
+    { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
+const char SkHexadecimalDigits::gLower[16] =
+    { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };

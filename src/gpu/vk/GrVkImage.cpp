@@ -61,7 +61,7 @@ void GrVkImage::setImageLayout(const GrVkGpu* gpu, VkImageLayout newLayout,
 
     gpu->addImageMemoryBarrier(srcStageMask, dstStageMask, byRegion, &imageMemoryBarrier);
 
-    fInfo.fImageLayout = newLayout;
+    this->updateImageLayout(newLayout);
 }
 
 bool GrVkImage::InitImageInfo(const GrVkGpu* gpu, const ImageDesc& imageDesc, GrVkImageInfo* info) {
@@ -152,13 +152,13 @@ void GrVkImage::abandonImage() {
     }
 }
 
-void GrVkImage::setResourceRelease(ReleaseProc proc, ReleaseCtx ctx) {
+void GrVkImage::setResourceRelease(sk_sp<GrReleaseProcHelper> releaseHelper) {
     // Forward the release proc on to GrVkImage::Resource
-    fResource->setRelease(proc, ctx);
+    fResource->setRelease(std::move(releaseHelper));
 }
 
 void GrVkImage::Resource::freeGPUData(const GrVkGpu* gpu) const {
-    SkASSERT(!fReleaseProc);
+    SkASSERT(!fReleaseHelper);
     VK_CALL(gpu, DestroyImage(gpu->device(), fImage, nullptr));
     bool isLinear = (VK_IMAGE_TILING_LINEAR == fImageTiling);
     GrVkMemory::FreeImageMemory(gpu, isLinear, fAlloc);

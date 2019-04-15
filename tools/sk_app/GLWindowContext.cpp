@@ -6,17 +6,17 @@
  * found in the LICENSE file.
  */
 
-#include "GrBackendSurface.h"
-#include "GrContext.h"
 #include "GLWindowContext.h"
-
-#include "gl/GrGLDefines.h"
-#include "gl/GrGLUtil.h"
-
+#include "GrBackendSurface.h"
+#include "GrCaps.h"
+#include "GrContext.h"
+#include "GrContextPriv.h"
 #include "SkCanvas.h"
 #include "SkImage_Base.h"
 #include "SkMathPriv.h"
 #include "SkSurface.h"
+#include "gl/GrGLDefines.h"
+#include "gl/GrGLUtil.h"
 
 namespace sk_app {
 
@@ -24,9 +24,7 @@ GLWindowContext::GLWindowContext(const DisplayParams& params)
     : WindowContext(params)
     , fBackendContext(nullptr)
     , fSurface(nullptr) {
-    fDisplayParams.fMSAASampleCount = fDisplayParams.fMSAASampleCount ?
-                                      GrNextPow2(fDisplayParams.fMSAASampleCount) :
-                                      0;
+    fDisplayParams.fMSAASampleCount = GrNextPow2(fDisplayParams.fMSAASampleCount);
 }
 
 void GLWindowContext::initializeContext() {
@@ -34,7 +32,7 @@ void GLWindowContext::initializeContext() {
 
     fBackendContext = this->onInitializeContext();
     fContext = GrContext::MakeGL(fBackendContext, fDisplayParams.fGrContextOptions);
-    if (!fContext && fDisplayParams.fMSAASampleCount) {
+    if (!fContext && fDisplayParams.fMSAASampleCount > 1) {
         fDisplayParams.fMSAASampleCount /= 2;
         this->initializeContext();
         return;
@@ -63,8 +61,10 @@ sk_sp<SkSurface> GLWindowContext::getBackbufferSurface() {
             GR_GL_CALL(fBackendContext.get(), GetIntegerv(GR_GL_FRAMEBUFFER_BINDING,
                                                           &buffer));
             fbInfo.fFBOID = buffer;
-            fbInfo.fFormat = fContext->caps()->srgbSupport() && fDisplayParams.fColorSpace
-                             ? GR_GL_SRGB8_ALPHA8 : GR_GL_RGBA8;
+            fbInfo.fFormat =
+                    fContext->contextPriv().caps()->srgbSupport() && fDisplayParams.fColorSpace
+                            ? GR_GL_SRGB8_ALPHA8
+                            : GR_GL_RGBA8;
 
             GrBackendRenderTarget backendRT(fWidth,
                                             fHeight,
@@ -76,7 +76,7 @@ sk_sp<SkSurface> GLWindowContext::getBackbufferSurface() {
                                                               kBottomLeft_GrSurfaceOrigin,
                                                               kRGBA_8888_SkColorType,
                                                               fDisplayParams.fColorSpace,
-                                                              &fSurfaceProps);
+                                                              &fDisplayParams.fSurfaceProps);
         }
     }
 

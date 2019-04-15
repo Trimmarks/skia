@@ -20,7 +20,6 @@
 #include "SkArenaAlloc.h"
 #include "SkCoreBlitters.h"
 #include "SkColorSpaceXform.h"
-#include "SkColorSpace_Base.h"
 
 struct Matrix43 {
     float fMat[12];    // column major
@@ -56,8 +55,9 @@ static SkScan::HairRCProc ChooseHairProc(bool doAntiAlias) {
     return doAntiAlias ? SkScan::AntiHairLine : SkScan::HairLine;
 }
 
-static bool texture_to_matrix(const VertState& state, const SkPoint verts[],
-                              const SkPoint texs[], SkMatrix* matrix) {
+static bool SK_WARN_UNUSED_RESULT
+texture_to_matrix(const VertState& state, const SkPoint verts[], const SkPoint texs[],
+                  SkMatrix* matrix) {
     SkPoint src[3], dst[3];
 
     src[0] = texs[state.f0];
@@ -77,7 +77,7 @@ public:
 
     bool isOpaque() const override { return fIsOpaque; }
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
 
     // For serialization.  This will never be called.
     Factory getFactory() const override { SK_ABORT("not reached"); return nullptr; }
@@ -87,7 +87,7 @@ protected:
         return nullptr;
     }
     bool onAppendStages(const StageRec& rec) const override {
-        rec.fPipeline->append_seed_shader();
+        rec.fPipeline->append(SkRasterPipeline::seed_shader);
         rec.fPipeline->append(SkRasterPipeline::matrix_4x3, &fM43);
         return true;
     }
@@ -99,7 +99,6 @@ private:
     typedef SkShaderBase INHERITED;
 };
 
-#ifndef SK_IGNORE_TO_STRING
 void SkTriColorShader::toString(SkString* str) const {
     str->append("SkTriColorShader: (");
 
@@ -107,11 +106,10 @@ void SkTriColorShader::toString(SkString* str) const {
 
     str->append(")");
 }
-#endif
 
-static bool update_tricolor_matrix(const SkMatrix& ctmInv,
-                                   const SkPoint pts[], const SkPM4f colors[],
-                                   int index0, int index1, int index2, Matrix43* result) {
+static bool SK_WARN_UNUSED_RESULT
+update_tricolor_matrix(const SkMatrix& ctmInv, const SkPoint pts[], const SkPM4f colors[],
+                       int index0, int index1, int index2, Matrix43* result) {
     SkMatrix m, im;
     m.reset();
     m.set(0, pts[index1].fX - pts[index0].fX);
@@ -225,6 +223,15 @@ void SkDraw::drawVertices(SkVertices::VertexMode vmode, int count,
     SkPoint* devVerts = outerAlloc.makeArray<SkPoint>(count);
     fMatrix->mapPoints(devVerts, vertices, count);
 
+    {
+        SkRect bounds;
+        // this also sets bounds to empty if we see a non-finite value
+        bounds.set(devVerts, count);
+        if (bounds.isEmpty()) {
+            return;
+        }
+    }
+
     VertState       state(count, indices, indexCount);
     VertState::Proc vertProc = state.chooseProc(vmode);
 
@@ -272,7 +279,9 @@ void SkDraw::drawVertices(SkVertices::VertexMode vmode, int count,
                 SkMatrix tmpCtm;
                 if (textures) {
                     SkMatrix localM;
-                    texture_to_matrix(state, vertices, textures, &localM);
+                    if (!texture_to_matrix(state, vertices, textures, &localM)) {
+                        continue;
+                    }
                     tmpCtm = SkMatrix::Concat(*fMatrix, localM);
                     ctm = &tmpCtm;
                 }
@@ -294,7 +303,7 @@ void SkDraw::drawVertices(SkVertices::VertexMode vmode, int count,
         // no colors[] and no texture, stroke hairlines with paint's color.
         SkPaint p;
         p.setStyle(SkPaint::kStroke_Style);
-        SkAutoBlitterChoose blitter(fDst, *fMatrix, p);
+        SkAutoBlitterChoose blitter(*this, nullptr, p);
         // Abort early if we failed to create a shader context.
         if (blitter->isNullBlitter()) {
             return;

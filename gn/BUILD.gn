@@ -112,6 +112,17 @@ config("default") {
       "-mfpu=neon",
       "-mthumb",
     ]
+  } else if (current_cpu == "loongson3a") {
+    asmflags += [ "-march=loongson3a" ]
+    cflags += [
+      "-march=loongson3a",
+
+      # Causes an internal compiler error.
+      "-DSKCMS_PORTABLE",
+    ]
+  } else if (current_cpu == "mips64el") {
+    asmflags += [ "-march=mips64" ]
+    cflags += [ "-march=mips64" ]
   } else if (current_cpu == "x86" && !is_win) {
     asmflags += [ "-m32" ]
     cflags += [
@@ -158,8 +169,10 @@ config("default") {
     libs += [
       "c++_static",
       "c++abi",
-      "android_support",
     ]
+    if (ndk_api < 21) {
+      libs += [ "android_support" ]
+    }
   }
 
   if (is_ios) {
@@ -210,9 +223,17 @@ config("default") {
     # You can either pass the sanitizers directly, e.g. "address,undefined",
     # or pass one of the couple common aliases used by the bots.
     sanitizers = sanitize
+
+    # fyi_sanitizers only print out stacktraces of their issues
+    fyi_sanitizers = fyi_sanitize
     if (sanitize == "ASAN" || sanitize == "UBSAN") {
       # ASAN implicitly runs all UBSAN checks also.
       sanitizers = "bool,float-cast-overflow,integer-divide-by-zero,nonnull-attribute,null,return,returns-nonnull-attribute,shift,signed-integer-overflow,unreachable,vla-bound"
+
+      if (fyi_sanitize == "" && !is_android) {
+        fyi_sanitizers = "float-divide-by-zero"
+      }
+
       if (!is_mac && !is_win) {
         sanitizers += ",function"  # Not supported on Mac or Win.
       }
@@ -243,15 +264,19 @@ config("default") {
     }
 
     cflags += [
-      "-fsanitize=$sanitizers",
+      "-fsanitize=$sanitizers,$fyi_sanitizers",
       "-fno-sanitize-recover=$sanitizers",
-      "-fsanitize-blacklist=" + rebase_path("../tools/xsan.blacklist"),
     ]
+    if (!is_win) {
+      cflags += [ "-fno-omit-frame-pointer" ]
+    }
+    if (is_linux) {
+      cflags_cc += [ "-stdlib=libc++" ]
+      ldflags += [ "-stdlib=libc++" ]
+    }
     ldflags += [ "-fsanitize=$sanitizers" ]
     if (sanitizers == "memory") {
       cflags += [ "-fsanitize-memory-track-origins" ]
-      cflags_cc += [ "-stdlib=libc++" ]
-      ldflags += [ "-stdlib=libc++" ]
     }
   }
 }
@@ -293,7 +318,10 @@ config("warnings") {
       "-Wno-deprecated-declarations",
       "-Wno-maybe-uninitialized",
     ]
-    cflags_cc += [ "-Wnon-virtual-dtor" ]
+    cflags_cc += [
+      "-Wnon-virtual-dtor",
+      "-Wno-noexcept-type",
+    ]
   }
 
   if (is_clang) {
@@ -357,9 +385,9 @@ config("warnings") {
 
     # We are unlikely to want to fix these.
     cflags += [
+      "-Wno-bad-function-cast",
       "-Wno-covered-switch-default",
       "-Wno-deprecated",
-      "-Wno-implicit-fallthrough",
       "-Wno-missing-noreturn",
       "-Wno-old-style-cast",
       "-Wno-padded",
@@ -378,6 +406,9 @@ config("warnings") {
       "-Wno-direct-ivar-access",
       "-Wno-objcc-interface-ivars",
     ]
+  }
+  if (!is_win || is_clang) {
+    cflags += [ "-Wno-implicit-fallthrough" ]
   }
 }
 config("warnings_except_public_headers") {

@@ -5,7 +5,6 @@
  * found in the LICENSE file.
  */
 
-#include "SkColorSpace_Base.h"
 #include "SkPM4fPriv.h"
 #include "SkRasterPipeline.h"
 #include "SkReadBuffer.h"
@@ -65,22 +64,17 @@ SkToSRGBColorFilter::SkToSRGBColorFilter(sk_sp<SkColorSpace> srcColorSpace)
 
 sk_sp<SkFlattenable> SkToSRGBColorFilter::CreateProc(SkReadBuffer& buffer) {
     auto data = buffer.readByteArrayAsData();
-    if (data) {
-        return Make(SkColorSpace::Deserialize(data->data(), data->size()));
-    }
-    return nullptr;
+    return data ? Make(SkColorSpace::Deserialize(data->data(), data->size())) : nullptr;
 }
 
 void SkToSRGBColorFilter::flatten(SkWriteBuffer& buffer) const {
     buffer.writeDataAsByteArray(fSrcColorSpace->serialize().get());
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkToSRGBColorFilter::toString(SkString* str) const {
     // TODO
     str->append("SkToSRGBColorFilter ");
 }
-#endif
 
 #if SK_SUPPORT_GPU
 std::unique_ptr<GrFragmentProcessor> SkToSRGBColorFilter::asFragmentProcessor(

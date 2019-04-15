@@ -9,6 +9,7 @@
 #include "Sk4fLinearGradient.h"
 #include "SkColorSpace_XYZ.h"
 #include "SkColorSpaceXformer.h"
+#include "SkFlattenablePriv.h"
 #include "SkFloatBits.h"
 #include "SkGradientBitmapCache.h"
 #include "SkGradientShaderPriv.h"
@@ -71,6 +72,16 @@ void SkGradientShaderBase::Descriptor::flatten(SkWriteBuffer& buffer) const {
     }
 }
 
+template <int N, typename T, bool MEM_MOVE>
+static bool validate_array(SkReadBuffer& buffer, size_t count, SkSTArray<N, T, MEM_MOVE>* array) {
+    if (!buffer.validateCanReadN<T>(count)) {
+        return false;
+    }
+
+    array->resize_back(count);
+    return true;
+}
+
 bool SkGradientShaderBase::DescriptorScope::unflatten(SkReadBuffer& buffer) {
     // New gradient format. Includes floating point color, color space, densely packed flags
     uint32_t flags = buffer.readUInt();
@@ -79,28 +90,25 @@ bool SkGradientShaderBase::DescriptorScope::unflatten(SkReadBuffer& buffer) {
     fGradFlags = (flags >> kGradFlagsShift_GSF) & kGradFlagsMask_GSF;
 
     fCount = buffer.getArrayCount();
-    if (fCount > kStorageCount) {
-        size_t allocSize = (sizeof(SkColor4f) + sizeof(SkScalar)) * fCount;
-        fDynamicStorage.reset(allocSize);
-        fColors = (SkColor4f*)fDynamicStorage.get();
-        fPos = (SkScalar*)(fColors + fCount);
-    } else {
-        fColors = fColorStorage;
-        fPos = fPosStorage;
-    }
-    if (!buffer.readColor4fArray(mutableColors(), fCount)) {
+
+    if (!(validate_array(buffer, fCount, &fColorStorage) &&
+          buffer.readColor4fArray(fColorStorage.begin(), fCount))) {
         return false;
     }
+    fColors = fColorStorage.begin();
+
     if (SkToBool(flags & kHasColorSpace_GSF)) {
         sk_sp<SkData> data = buffer.readByteArrayAsData();
-        fColorSpace = SkColorSpace::Deserialize(data->data(), data->size());
+        fColorSpace = data ? SkColorSpace::Deserialize(data->data(), data->size()) : nullptr;
     } else {
         fColorSpace = nullptr;
     }
     if (SkToBool(flags & kHasPosition_GSF)) {
-        if (!buffer.readScalarArray(mutablePos(), fCount)) {
+        if (!(validate_array(buffer, fCount, &fPosStorage) &&
+              buffer.readScalarArray(fPosStorage.begin(), fCount))) {
             return false;
         }
+        fPos = fPosStorage.begin();
     } else {
         fPos = nullptr;
     }
@@ -118,6 +126,7 @@ bool SkGradientShaderBase::DescriptorScope::unflatten(SkReadBuffer& buffer) {
 SkGradientShaderBase::SkGradientShaderBase(const Descriptor& desc, const SkMatrix& ptsToUnit)
     : INHERITED(desc.fLocalMatrix)
     , fPtsToUnit(ptsToUnit)
+    , fColorSpace(desc.fColorSpace ? desc.fColorSpace : SkColorSpace::MakeSRGBLinear())
     , fColorsAreOpaque(true)
 {
     fPtsToUnit.getType();  // Precache so reads are threadsafe.
@@ -166,16 +175,6 @@ SkGradientShaderBase::SkGradientShaderBase(const Descriptor& desc, const SkMatri
     if (dummyLast) {
         origColors += desc.fCount;
         *origColors = desc.fColors[desc.fCount - 1];
-    }
-
-    if (!desc.fColorSpace) {
-        // This happens if we were constructed from SkColors, so our colors are really sRGB
-        fColorSpace = SkColorSpace::MakeSRGBLinear();
-    } else {
-        // The color space refers to the float colors, so it must be linear gamma
-        // TODO: GPU code no longer requires this (see GrGradientEffect). Remove this restriction?
-        SkASSERT(desc.fColorSpace->gammaIsLinear());
-        fColorSpace = desc.fColorSpace;
     }
 
     if (desc.fPos) {
@@ -279,6 +278,7 @@ bool SkGradientShaderBase::onAppendStages(const StageRec& rec) const {
     SkRasterPipeline* p = rec.fPipeline;
     SkArenaAlloc* alloc = rec.fAlloc;
     SkColorSpace* dstCS = rec.fDstCS;
+    SkJumper_DecalTileCtx* decal_ctx = nullptr;
 
     SkMatrix matrix;
     if (!this->computeTotalInverse(rec.fCTM, rec.fLocalM, &matrix)) {
@@ -288,13 +288,19 @@ bool SkGradientShaderBase::onAppendStages(const StageRec& rec) const {
 
     SkRasterPipeline_<256> postPipeline;
 
-    p->append_seed_shader();
+    p->append(SkRasterPipeline::seed_shader);
     p->append_matrix(alloc, matrix);
     this->appendGradientStages(alloc, p, &postPipeline);
 
     switch(fTileMode) {
         case kMirror_TileMode: p->append(SkRasterPipeline::mirror_x_1); break;
         case kRepeat_TileMode: p->append(SkRasterPipeline::repeat_x_1); break;
+        case kDecal_TileMode:
+            decal_ctx = alloc->make<SkJumper_DecalTileCtx>();
+            decal_ctx->limit_x = SkBits2Float(SkFloat2Bits(1.0f) + 1);
+            // reuse mask + limit_x stage, or create a custom decal_1 that just stores the mask
+            p->append(SkRasterPipeline::decal_x, decal_ctx);
+            // fall-through to clamp
         case kClamp_TileMode:
             if (!fOrigPos) {
                 // We clamp only when the stops are evenly spaced.
@@ -303,6 +309,7 @@ bool SkGradientShaderBase::onAppendStages(const StageRec& rec) const {
                 // which is the only stage that will correctly handle unclamped t.
                 p->append(SkRasterPipeline::clamp_x_1);
             }
+            break;
     }
 
     const bool premulGrad = fGradFlags & SkGradientShader::kInterpolateColorsInPremul_Flag;
@@ -393,6 +400,10 @@ bool SkGradientShaderBase::onAppendStages(const StageRec& rec) const {
         }
     }
 
+    if (decal_ctx) {
+        p->append(SkRasterPipeline::check_decal_mask, decal_ctx);
+    }
+
     if (!premulGrad && !this->colorsAreOpaque()) {
         p->append(SkRasterPipeline::premul);
     }
@@ -404,7 +415,7 @@ bool SkGradientShaderBase::onAppendStages(const StageRec& rec) const {
 
 
 bool SkGradientShaderBase::isOpaque() const {
-    return fColorsAreOpaque;
+    return fColorsAreOpaque && (this->getTileMode() != SkShader::kDecal_TileMode);
 }
 
 static unsigned rounded_divide(unsigned numer, unsigned denom) {
@@ -591,6 +602,7 @@ void SkGradientShaderBase::getGradientTableBitmap(SkBitmap* bitmap,
 
         bitmap->allocPixels(info);
         this->initLinearBitmap(bitmap, bitmapType);
+        bitmap->setImmutable();
         gCache->add(storage.get(), size, *bitmap);
     }
 }
@@ -615,7 +627,6 @@ void SkGradientShaderBase::commonAsAGradient(GradientInfo* info) const {
     }
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkGradientShaderBase::toString(SkString* str) const {
 
     str->appendf("%d colors: ", fColorCount);
@@ -639,7 +650,7 @@ void SkGradientShaderBase::toString(SkString* str) const {
     }
 
     static const char* gTileModeName[SkShader::kTileModeCount] = {
-        "clamp", "repeat", "mirror"
+        "clamp", "repeat", "mirror", "decal",
     };
 
     str->append(" ");
@@ -647,7 +658,6 @@ void SkGradientShaderBase::toString(SkString* str) const {
 
     this->INHERITED::toString(str);
 }
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -1255,11 +1265,12 @@ GrGradientEffect::GrGradientEffect(ClassID classID, const CreateArgs& args, bool
     } else {
         SkGradientShaderBase::GradientBitmapType bitmapType =
             SkGradientShaderBase::GradientBitmapType::kLegacy;
+        auto caps = args.fContext->contextPriv().caps();
         if (args.fDstColorSpace) {
             // Try to use F16 if we can
-            if (args.fContext->caps()->isConfigTexturable(kRGBA_half_GrPixelConfig)) {
+            if (caps->isConfigTexturable(kRGBA_half_GrPixelConfig)) {
                 bitmapType = SkGradientShaderBase::GradientBitmapType::kHalfFloat;
-            } else if (args.fContext->caps()->isConfigTexturable(kSRGBA_8888_GrPixelConfig)) {
+            } else if (caps->isConfigTexturable(kSRGBA_8888_GrPixelConfig)) {
                 bitmapType = SkGradientShaderBase::GradientBitmapType::kSRGB;
             } else {
                 // This can happen, but only if someone explicitly creates an unsupported
@@ -1271,21 +1282,21 @@ GrGradientEffect::GrGradientEffect(ClassID classID, const CreateArgs& args, bool
         shader.getGradientTableBitmap(&bitmap, bitmapType);
         SkASSERT(1 == bitmap.height() && SkIsPow2(bitmap.width()));
 
+        auto atlasManager = args.fContext->contextPriv().textureStripAtlasManager();
 
         GrTextureStripAtlas::Desc desc;
         desc.fWidth  = bitmap.width();
         desc.fHeight = 32;
-        desc.fRowHeight = bitmap.height();
-        desc.fContext = args.fContext;
-        desc.fConfig = SkImageInfo2GrPixelConfig(bitmap.info(), *args.fContext->caps());
-        fAtlas = GrTextureStripAtlas::GetAtlas(desc);
+        desc.fRowHeight = bitmap.height(); // always 1 here
+        desc.fConfig = SkImageInfo2GrPixelConfig(bitmap.info(), *caps);
+        fAtlas = atlasManager->refAtlas(desc);
         SkASSERT(fAtlas);
 
         // We always filter the gradient table. Each table is one row of a texture, always
         // y-clamp.
         GrSamplerState samplerState(args.fWrapMode, GrSamplerState::Filter::kBilerp);
 
-        fRow = fAtlas->lockRow(bitmap);
+        fRow = fAtlas->lockRow(args.fContext, bitmap);
         if (-1 != fRow) {
             fYCoord = fAtlas->getYOffset(fRow)+SK_ScalarHalf*fAtlas->getNormalizedTexelHeight();
             // This is 1/2 places where auto-normalization is disabled
@@ -1297,11 +1308,18 @@ GrGradientEffect::GrGradientEffect(ClassID classID, const CreateArgs& args, bool
             // and the proxy is:
             //   exact fit, power of two in both dimensions
             // Only the x-tileMode is unknown. However, given all the other knowns we know
-            // that GrMakeCachedBitmapProxy is sufficient (i.e., it won't need to be
+            // that GrMakeCachedImageProxy is sufficient (i.e., it won't need to be
             // extracted to a subset or mipmapped).
-            sk_sp<GrTextureProxy> proxy = GrMakeCachedBitmapProxy(
+
+            SkASSERT(bitmap.isImmutable());
+            sk_sp<SkImage> srcImage = SkImage::MakeFromBitmap(bitmap);
+            if (!srcImage) {
+                return;
+            }
+
+            sk_sp<GrTextureProxy> proxy = GrMakeCachedImageProxy(
                                                      args.fContext->contextPriv().proxyProvider(),
-                                                     bitmap);
+                                                     std::move(srcImage));
             if (!proxy) {
                 SkDebugf("Gradient won't draw. Could not create texture.");
                 return;

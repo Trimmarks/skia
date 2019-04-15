@@ -8,6 +8,7 @@
 #include "SkTileImageFilter.h"
 #include "SkColorSpaceXformer.h"
 #include "SkCanvas.h"
+#include "SkFlattenablePriv.h"
 #include "SkImage.h"
 #include "SkImageFilterPriv.h"
 #include "SkMatrix.h"
@@ -75,9 +76,6 @@ sk_sp<SkSpecialImage> SkTileImageFilter::onFilterImage(SkSpecialImage* source,
     sk_sp<SkImage> subset;
     if (inputBounds.contains(srcIRect)) {
         subset = input->asImage(&srcIRect);
-        if (!subset) {
-            return nullptr;
-        }
     } else {
         sk_sp<SkSurface> surf(input->makeTightSurface(ctx.outputProperties(), srcIRect.size()));
         if (!surf) {
@@ -95,6 +93,9 @@ sk_sp<SkSpecialImage> SkTileImageFilter::onFilterImage(SkSpecialImage* source,
                     &paint);
 
         subset = surf->makeImageSnapshot();
+    }
+    if (!subset) {
+        return nullptr;
     }
     SkASSERT(subset->width() == srcIRect.width());
     SkASSERT(subset->height() == srcIRect.height());
@@ -128,13 +129,14 @@ sk_sp<SkImageFilter> SkTileImageFilter::onMakeColorSpace(SkColorSpaceXformer* xf
 }
 
 SkIRect SkTileImageFilter::onFilterNodeBounds(const SkIRect& src, const SkMatrix& ctm,
-                                              MapDirection direction) const {
-    SkRect rect = kReverse_MapDirection == direction ? fSrcRect : fDstRect;
+                                              MapDirection dir, const SkIRect* inputRect) const {
+    SkRect rect = kReverse_MapDirection == dir ? fSrcRect : fDstRect;
     ctm.mapRect(&rect);
     return rect.roundOut();
 }
 
-SkIRect SkTileImageFilter::onFilterBounds(const SkIRect& src, const SkMatrix&, MapDirection) const {
+SkIRect SkTileImageFilter::onFilterBounds(const SkIRect& src, const SkMatrix&,
+                                          MapDirection, const SkIRect* inputRect) const {
     // Don't recurse into inputs.
     return src;
 }
@@ -157,7 +159,6 @@ void SkTileImageFilter::flatten(SkWriteBuffer& buffer) const {
     buffer.writeRect(fDstRect);
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkTileImageFilter::toString(SkString* str) const {
     str->appendf("SkTileImageFilter: (");
     str->appendf("src: %.2f %.2f %.2f %.2f",
@@ -171,4 +172,3 @@ void SkTileImageFilter::toString(SkString* str) const {
     }
     str->append(")");
 }
-#endif

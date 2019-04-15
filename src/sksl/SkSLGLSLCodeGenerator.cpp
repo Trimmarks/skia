@@ -505,12 +505,14 @@ void GLSLCodeGenerator::writeFunctionCall(const FunctionCall& c) {
         fHeader.writeText(" : require\n");
         fFoundDerivatives = true;
     }
+    bool isTextureFunctionWithBias = false;
     if (c.fFunction.fName == "texture" && c.fFunction.fBuiltin) {
         const char* dim = "";
         bool proj = false;
         switch (c.fArguments[0]->fType.dimensions()) {
             case SpvDim1D:
                 dim = "1D";
+                isTextureFunctionWithBias = true;
                 if (c.fArguments[1]->fType == *fContext.fFloat_Type) {
                     proj = false;
                 } else {
@@ -520,6 +522,9 @@ void GLSLCodeGenerator::writeFunctionCall(const FunctionCall& c) {
                 break;
             case SpvDim2D:
                 dim = "2D";
+                if (c.fArguments[0]->fType != *fContext.fSamplerExternalOES_Type) {
+                    isTextureFunctionWithBias = true;
+                }
                 if (c.fArguments[1]->fType == *fContext.fFloat2_Type) {
                     proj = false;
                 } else {
@@ -529,6 +534,7 @@ void GLSLCodeGenerator::writeFunctionCall(const FunctionCall& c) {
                 break;
             case SpvDim3D:
                 dim = "3D";
+                isTextureFunctionWithBias = true;
                 if (c.fArguments[1]->fType == *fContext.fFloat3_Type) {
                     proj = false;
                 } else {
@@ -538,6 +544,7 @@ void GLSLCodeGenerator::writeFunctionCall(const FunctionCall& c) {
                 break;
             case SpvDimCube:
                 dim = "Cube";
+                isTextureFunctionWithBias = true;
                 proj = false;
                 break;
             case SpvDimRect:
@@ -573,6 +580,9 @@ void GLSLCodeGenerator::writeFunctionCall(const FunctionCall& c) {
         separator = ", ";
         this->writeExpression(*arg, kSequence_Precedence);
     }
+    if (fProgram.fSettings.fSharpenTextures && isTextureFunctionWithBias) {
+        this->write(", -0.5");
+    }
     this->write(")");
 }
 
@@ -598,8 +608,19 @@ void GLSLCodeGenerator::writeConstructor(const Constructor& c, Precedence parent
 
 void GLSLCodeGenerator::writeFragCoord() {
     if (!fProgram.fSettings.fCaps->canUseFragCoord()) {
-        this->write("vec4(sk_FragCoord_Workaround.xyz / sk_FragCoord_Workaround.w, "
-                    "1.0 / sk_FragCoord_Workaround.w)");
+        if (!fSetupFragCoordWorkaround) {
+            const char* precision = usesPrecisionModifiers() ? "highp " : "";
+            fFunctionHeader += precision;
+            fFunctionHeader += "    float sk_FragCoord_InvW = 1. / sk_FragCoord_Workaround.w;\n";
+            fFunctionHeader += precision;
+            fFunctionHeader += "    vec4 sk_FragCoord_Resolved = "
+                "vec4(sk_FragCoord_Workaround.xyz * sk_FragCoord_InvW, sk_FragCoord_InvW);\n";
+            // Ensure that we get exact .5 values for x and y.
+            fFunctionHeader += "    sk_FragCoord_Resolved.xy = floor(sk_FragCoord_Resolved.xy) + "
+                               "vec2(.5);\n";
+            fSetupFragCoordWorkaround = true;
+        }
+        this->write("sk_FragCoord_Resolved");
         return;
     }
 
@@ -672,6 +693,9 @@ void GLSLCodeGenerator::writeVariableReference(const VariableReference& ref) {
             break;
         case SK_INVOCATIONID_BUILTIN:
             this->write("gl_InvocationID");
+            break;
+        case SK_LASTFRAGCOLOR_BUILTIN:
+            this->write(fProgram.fSettings.fCaps->fbFetchColorName());
             break;
         default:
             this->write(ref.fVariable.fName);
@@ -994,8 +1018,14 @@ const char* GLSLCodeGenerator::getTypePrecision(const Type& type) {
     if (usesPrecisionModifiers()) {
         switch (type.kind()) {
             case Type::kScalar_Kind:
-                if (type == *fContext.fHalf_Type || type == *fContext.fShort_Type ||
-                        type == *fContext.fUShort_Type) {
+                if (type == *fContext.fShort_Type || type == *fContext.fUShort_Type) {
+                    if (fProgram.fSettings.fForceHighPrecision ||
+                            fProgram.fSettings.fCaps->incompleteShortIntPrecision()) {
+                        return "highp ";
+                    }
+                    return "mediump ";
+                }
+                if (type == *fContext.fHalf_Type) {
                     return fProgram.fSettings.fForceHighPrecision ? "highp " : "mediump ";
                 }
                 if (type == *fContext.fFloat_Type || type == *fContext.fInt_Type ||
@@ -1052,6 +1082,19 @@ void GLSLCodeGenerator::writeVarDeclarations(const VarDeclarations& decl, bool g
                 fHeader.writeText(" : require\n");
             }
             fFoundImageDecl = true;
+        }
+        if (!fFoundExternalSamplerDecl && var.fVar->fType == *fContext.fSamplerExternalOES_Type) {
+            if (fProgram.fSettings.fCaps->externalTextureExtensionString()) {
+                fHeader.writeText("#extension ");
+                fHeader.writeText(fProgram.fSettings.fCaps->externalTextureExtensionString());
+                fHeader.writeText(" : enable\n");
+            }
+            if (fProgram.fSettings.fCaps->secondExternalTextureExtensionString()) {
+                fHeader.writeText("#extension ");
+                fHeader.writeText(fProgram.fSettings.fCaps->secondExternalTextureExtensionString());
+                fHeader.writeText(" : enable\n");
+            }
+            fFoundExternalSamplerDecl = true;
         }
     }
     if (wroteType) {
@@ -1203,9 +1246,9 @@ void GLSLCodeGenerator::writeReturnStatement(const ReturnStatement& r) {
 void GLSLCodeGenerator::writeHeader() {
     this->write(fProgram.fSettings.fCaps->versionDeclString());
     this->writeLine();
-    for (const auto& e : fProgram.fElements) {
-        if (e->fKind == ProgramElement::kExtension_Kind) {
-            this->writeExtension((Extension&) *e);
+    for (const auto& e : fProgram) {
+        if (e.fKind == ProgramElement::kExtension_Kind) {
+            this->writeExtension((Extension&) e);
         }
     }
     if (!fProgram.fSettings.fCaps->canUseFragCoord()) {
@@ -1243,7 +1286,11 @@ void GLSLCodeGenerator::writeProgramElement(const ProgramElement& e) {
                     this->writeLine();
                 } else if (builtin == SK_FRAGCOLOR_BUILTIN &&
                            fProgram.fSettings.fCaps->mustDeclareFragmentShaderOutput()) {
-                    this->write("out ");
+                    if (fProgram.fSettings.fFragColorIsInOut) {
+                        this->write("inout ");
+                    } else {
+                        this->write("out ");
+                    }
                     if (usesPrecisionModifiers()) {
                         this->write("mediump ");
                     }
@@ -1293,8 +1340,8 @@ bool GLSLCodeGenerator::generateCode() {
     }
     StringStream body;
     fOut = &body;
-    for (const auto& e : fProgram.fElements) {
-        this->writeProgramElement(*e);
+    for (const auto& e : fProgram) {
+        this->writeProgramElement(e);
     }
     fOut = rawOut;
 

@@ -22,7 +22,8 @@ public:
 
         // The input r0, r1 are the radii when we map centers to {(0, 0), (1, 0)}.
         // We'll post concat matrix with our transformation matrix that maps focal point to (0, 0).
-        void set(SkScalar r0, SkScalar r1, SkMatrix& matrix);
+        // Returns true if the set succeeded
+        bool set(SkScalar r0, SkScalar r1, SkMatrix* matrix);
 
         // Whether the focal point (0, 0) is on the end circle with center (1, 0) and radius r1. If
         // this is true, it's as if an aircraft is flying at Mach 1 and all circles (soundwaves)
@@ -49,7 +50,7 @@ public:
 
     SkShader::GradientType asAGradient(GradientInfo* info) const  override;
 #if SK_SUPPORT_GPU
-    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(const AsFPArgs&) const override;
+    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(const GrFPArgs&) const override;
 #endif
     bool isOpaque() const override;
 
@@ -64,7 +65,7 @@ public:
     const SkMatrix& getGradientMatrix() const { return fPtsToUnit; }
     const FocalData& getFocalData() const { return fFocalData; }
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkTwoPointConicalGradient)
 
 protected:
@@ -73,8 +74,6 @@ protected:
 
     void appendGradientStages(SkArenaAlloc* alloc, SkRasterPipeline* tPipeline,
                               SkRasterPipeline* postPipeline) const override;
-
-    bool onIsRasterPipelineOnly(const SkMatrix&) const override { return true; }
 
 private:
     SkTwoPointConicalGradient(const SkPoint& c0, SkScalar r0,

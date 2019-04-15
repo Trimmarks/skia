@@ -9,7 +9,6 @@
 #include "SkTypes.h"
 
 #if SK_SUPPORT_GPU
-#ifndef SK_DISABLE_DEFERRED_PROXIES
 #include "Test.h"
 
 #include "GrContextPriv.h"
@@ -21,6 +20,7 @@
 #include "GrTest.h"
 #include "GrTexture.h"
 #include "GrTextureProxy.h"
+#include "GrUninstantiateProxyTracker.h"
 
 struct ProxyParams {
     int             fSize;
@@ -35,28 +35,28 @@ struct ProxyParams {
 static sk_sp<GrSurfaceProxy> make_deferred(GrProxyProvider* proxyProvider, const ProxyParams& p) {
     GrSurfaceDesc desc;
     desc.fFlags = p.fIsRT ? kRenderTarget_GrSurfaceFlag : kNone_GrSurfaceFlags;
-    desc.fOrigin = p.fOrigin;
     desc.fWidth  = p.fSize;
     desc.fHeight = p.fSize;
     desc.fConfig = p.fConfig;
     desc.fSampleCnt = p.fSampleCnt;
 
-    return proxyProvider->createProxy(desc, p.fFit, SkBudgeted::kNo);
+    return proxyProvider->createProxy(desc, p.fOrigin, p.fFit, SkBudgeted::kNo);
 }
 
 static sk_sp<GrSurfaceProxy> make_backend(GrContext* context, const ProxyParams& p,
                                           GrBackendTexture* backendTex) {
     GrProxyProvider* proxyProvider = context->contextPriv().proxyProvider();
+    GrGpu* gpu = context->contextPriv().getGpu();
 
-    *backendTex = context->getGpu()->createTestingOnlyBackendTexture(nullptr, p.fSize, p.fSize,
-                                                                     p.fConfig, false,
-                                                                     GrMipMapped::kNo);
+    *backendTex = gpu->createTestingOnlyBackendTexture(nullptr, p.fSize, p.fSize,
+                                                       p.fConfig, false,
+                                                       GrMipMapped::kNo);
 
-    return proxyProvider->createWrappedTextureProxy(*backendTex, p.fOrigin);
+    return proxyProvider->wrapBackendTexture(*backendTex, p.fOrigin);
 }
 
-static void cleanup_backend(GrContext* context, GrBackendTexture* backendTex) {
-    context->getGpu()->deleteTestingOnlyBackendTexture(backendTex);
+static void cleanup_backend(GrContext* context, const GrBackendTexture& backendTex) {
+    context->contextPriv().getGpu()->deleteTestingOnlyBackendTexture(backendTex);
 }
 
 // Basic test that two proxies with overlapping intervals and compatible descriptors are
@@ -71,7 +71,10 @@ static void overlap_test(skiatest::Reporter* reporter, GrResourceProvider* resou
     alloc.markEndOfOpList(0);
 
     int startIndex, stopIndex;
-    alloc.assign(&startIndex, &stopIndex);
+    GrResourceAllocator::AssignError error;
+    GrUninstantiateProxyTracker uninstantiateTracker;
+    alloc.assign(&startIndex, &stopIndex, &uninstantiateTracker, &error);
+    REPORTER_ASSERT(reporter, GrResourceAllocator::AssignError::kNoError == error);
 
     REPORTER_ASSERT(reporter, p1->priv().peekSurface());
     REPORTER_ASSERT(reporter, p2->priv().peekSurface());
@@ -91,7 +94,10 @@ static void non_overlap_test(skiatest::Reporter* reporter, GrResourceProvider* r
     alloc.markEndOfOpList(0);
 
     int startIndex, stopIndex;
-    alloc.assign(&startIndex, &stopIndex);
+    GrResourceAllocator::AssignError error;
+    GrUninstantiateProxyTracker uninstantiateTracker;
+    alloc.assign(&startIndex, &stopIndex, &uninstantiateTracker, &error);
+    REPORTER_ASSERT(reporter, GrResourceAllocator::AssignError::kNoError == error);
 
     REPORTER_ASSERT(reporter, p1->priv().peekSurface());
     REPORTER_ASSERT(reporter, p2->priv().peekSurface());
@@ -99,9 +105,17 @@ static void non_overlap_test(skiatest::Reporter* reporter, GrResourceProvider* r
     REPORTER_ASSERT(reporter, expectedResult == doTheBackingStoresMatch);
 }
 
+bool GrResourceProvider::testingOnly_setExplicitlyAllocateGPUResources(bool newValue) {
+    bool oldValue = fExplicitlyAllocateGPUResources;
+    fExplicitlyAllocateGPUResources = newValue;
+    return oldValue;
+}
+
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(ResourceAllocatorTest, reporter, ctxInfo) {
     GrProxyProvider* proxyProvider = ctxInfo.grContext()->contextPriv().proxyProvider();
     GrResourceProvider* resourceProvider = ctxInfo.grContext()->contextPriv().resourceProvider();
+
+    bool orig = resourceProvider->testingOnly_setExplicitlyAllocateGPUResources(true);
 
     struct TestCase {
         ProxyParams   fP1;
@@ -143,8 +157,8 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(ResourceAllocatorTest, reporter, ctxInfo) {
                      std::move(p1), std::move(p2), test.fExpectation);
     }
 
-    int k2 = ctxInfo.grContext()->caps()->getSampleCount(2, kRGBA);
-    int k4 = ctxInfo.grContext()->caps()->getSampleCount(4, kRGBA);
+    int k2 = ctxInfo.grContext()->contextPriv().caps()->getRenderTargetSampleCount(2, kRGBA);
+    int k4 = ctxInfo.grContext()->contextPriv().caps()->getRenderTargetSampleCount(4, kRGBA);
 
     //--------------------------------------------------------------------------------------------
     TestCase gNonOverlappingTests[] = {
@@ -196,9 +210,10 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(ResourceAllocatorTest, reporter, ctxInfo) {
         sk_sp<GrSurfaceProxy> p2 = make_deferred(proxyProvider, t[0].fP2);
         non_overlap_test(reporter, resourceProvider,
                          std::move(p1), std::move(p2), t[0].fExpectation);
-        cleanup_backend(ctxInfo.grContext(), &backEndTex);
+        cleanup_backend(ctxInfo.grContext(), backEndTex);
     }
+
+    resourceProvider->testingOnly_setExplicitlyAllocateGPUResources(orig);
 }
 
-#endif
 #endif

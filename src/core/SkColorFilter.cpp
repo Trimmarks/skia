@@ -98,7 +98,6 @@ public:
         return fOuter->getFlags() & fInner->getFlags();
     }
 
-#ifndef SK_IGNORE_TO_STRING
     void toString(SkString* str) const override {
         SkString outerS, innerS;
         fOuter->toString(&outerS);
@@ -107,7 +106,6 @@ public:
         str->append(SkStringPrintf("SkComposeColorFilter: outer(%s) inner(%s)", outerS.c_str(),
                                    innerS.c_str()));
     }
-#endif
 
     void onAppendStages(SkRasterPipeline* p, SkColorSpace* dst, SkArenaAlloc* scratch,
                         bool shaderIsOpaque) const override {
@@ -159,7 +157,7 @@ private:
         auto outer = xformer->apply(fOuter.get());
         auto inner = xformer->apply(fInner.get());
         if (outer != fOuter || inner != fInner) {
-            return SkColorFilter::MakeComposeFilter(outer, inner);
+            return outer->makeComposed(inner);
         }
         return this->INHERITED::onMakeColorSpace(xformer);
     }
@@ -176,29 +174,26 @@ private:
 sk_sp<SkFlattenable> SkComposeColorFilter::CreateProc(SkReadBuffer& buffer) {
     sk_sp<SkColorFilter> outer(buffer.readColorFilter());
     sk_sp<SkColorFilter> inner(buffer.readColorFilter());
-    return MakeComposeFilter(std::move(outer), std::move(inner));
+    return outer ? outer->makeComposed(std::move(inner)) : inner;
 }
 
-sk_sp<SkColorFilter> SkColorFilter::MakeComposeFilter(sk_sp<SkColorFilter> outer,
-                                                      sk_sp<SkColorFilter> inner) {
-    if (!outer) {
-        return inner;
-    }
+
+sk_sp<SkColorFilter> SkColorFilter::makeComposed(sk_sp<SkColorFilter> inner) const {
     if (!inner) {
-        return outer;
+        return sk_ref_sp(this);
     }
 
     // Give the subclass a shot at a more optimal composition...
-    auto composition = outer->makeComposed(inner);
+    auto composition = this->onMakeComposed(inner);
     if (composition) {
         return composition;
     }
 
-    int count = inner->privateComposedFilterCount() + outer->privateComposedFilterCount();
+    int count = inner->privateComposedFilterCount() + this->privateComposedFilterCount();
     if (count > SK_MAX_COMPOSE_COLORFILTER_COUNT) {
         return nullptr;
     }
-    return sk_sp<SkColorFilter>(new SkComposeColorFilter(std::move(outer), std::move(inner),count));
+    return sk_sp<SkColorFilter>(new SkComposeColorFilter(sk_ref_sp(this), std::move(inner), count));
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -230,7 +225,7 @@ public:
     }
 #endif
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
 
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkSRGBGammaColorFilter)
 
@@ -266,18 +261,15 @@ private:
 
 sk_sp<SkFlattenable> SkSRGBGammaColorFilter::CreateProc(SkReadBuffer& buffer) {
     uint32_t dir = buffer.read32();
-    if (dir <= 1) {
-        return sk_sp<SkFlattenable>(new SkSRGBGammaColorFilter(static_cast<Direction>(dir)));
+    if (!buffer.validate(dir <= 1)) {
+        return nullptr;
     }
-    buffer.validate(false);
-    return nullptr;
+    return sk_sp<SkFlattenable>(new SkSRGBGammaColorFilter(static_cast<Direction>(dir)));
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkSRGBGammaColorFilter::toString(SkString* str) const {
     str->append("srgbgamma");
 }
-#endif
 
 template <SkSRGBGammaColorFilter::Direction dir>
 sk_sp<SkColorFilter> MakeSRGBGammaCF() {

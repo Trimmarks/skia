@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 
+#include "GrAtlasManager.h"
 #include "GrAtlasTextBlob.h"
 #include "GrTextUtils.h"
 #include "SkDistanceFieldGen.h"
@@ -38,6 +39,11 @@ inline void regen_vertices(char* vertex, const GrGlyph* glyph, size_t vertexStri
                            bool useDistanceFields, SkScalar transX, SkScalar transY,
                            GrColor color) {
     uint16_t u0, v0, u1, v1;
+#ifdef DISPLAY_PAGE_INDEX
+    // Enable this to visualize the page from which each glyph is being drawn.
+    // Green Red Magenta Cyan -> 0 1 2 3; Black -> error
+    SkColor hackColor;
+#endif
     if (regenTexCoords) {
         SkASSERT(glyph);
         int width = glyph->fBounds.width();
@@ -67,6 +73,25 @@ inline void regen_vertices(char* vertex, const GrGlyph* glyph, size_t vertexStri
         u1 |= uBit;
         v1 <<= 1;
         v1 |= vBit;
+#ifdef DISPLAY_PAGE_INDEX
+        switch (pageIndex) {
+            case 0:
+                hackColor = SK_ColorGREEN;
+                break;
+            case 1:
+                hackColor = SK_ColorRED;
+                break;
+            case 2:
+                hackColor = SK_ColorMAGENTA;
+                break;
+            case 3:
+                hackColor = SK_ColorCYAN;
+                break;
+            default:
+                hackColor = SK_ColorBLACK;
+                break;
+        }
+#endif
     }
 
     // This is a bit wonky, but sometimes we have LCD text, in which case we won't have color
@@ -90,6 +115,10 @@ inline void regen_vertices(char* vertex, const GrGlyph* glyph, size_t vertexStri
         uint16_t* textureCoords = reinterpret_cast<uint16_t*>(vertex + texCoordOffset);
         textureCoords[0] = u0;
         textureCoords[1] = v0;
+#ifdef DISPLAY_PAGE_INDEX
+        SkColor* vcolor = reinterpret_cast<SkColor*>(vertex + colorOffset);
+        *vcolor = hackColor;
+#endif
     }
     vertex += vertexStride;
 
@@ -109,6 +138,10 @@ inline void regen_vertices(char* vertex, const GrGlyph* glyph, size_t vertexStri
         uint16_t* textureCoords = reinterpret_cast<uint16_t*>(vertex + texCoordOffset);
         textureCoords[0] = u0;
         textureCoords[1] = v1;
+#ifdef DISPLAY_PAGE_INDEX
+        SkColor* vcolor = reinterpret_cast<SkColor*>(vertex + colorOffset);
+        *vcolor = hackColor;
+#endif
     }
     vertex += vertexStride;
 
@@ -128,6 +161,10 @@ inline void regen_vertices(char* vertex, const GrGlyph* glyph, size_t vertexStri
         uint16_t* textureCoords = reinterpret_cast<uint16_t*>(vertex + texCoordOffset);
         textureCoords[0] = u1;
         textureCoords[1] = v0;
+#ifdef DISPLAY_PAGE_INDEX
+        SkColor* vcolor = reinterpret_cast<SkColor*>(vertex + colorOffset);
+        *vcolor = hackColor;
+#endif
     }
     vertex += vertexStride;
 
@@ -147,17 +184,24 @@ inline void regen_vertices(char* vertex, const GrGlyph* glyph, size_t vertexStri
         uint16_t* textureCoords = reinterpret_cast<uint16_t*>(vertex + texCoordOffset);
         textureCoords[0] = u1;
         textureCoords[1] = v1;
+#ifdef DISPLAY_PAGE_INDEX
+        SkColor* vcolor = reinterpret_cast<SkColor*>(vertex + colorOffset);
+        *vcolor = hackColor;
+#endif
     }
 }
 
-Regenerator::VertexRegenerator(GrAtlasTextBlob* blob, int runIdx, int subRunIdx,
+Regenerator::VertexRegenerator(GrResourceProvider* resourceProvider, GrAtlasTextBlob* blob,
+                               int runIdx, int subRunIdx,
                                const SkMatrix& viewMatrix, SkScalar x, SkScalar y, GrColor color,
-                               GrDeferredUploadTarget* uploadTarget, GrAtlasGlyphCache* glyphCache,
-                               SkAutoGlyphCache* lazyCache)
-        : fViewMatrix(viewMatrix)
+                               GrDeferredUploadTarget* uploadTarget, GrGlyphCache* glyphCache,
+                               GrAtlasManager* fullAtlasManager, SkExclusiveStrikePtr* lazyCache)
+        : fResourceProvider(resourceProvider)
+        , fViewMatrix(viewMatrix)
         , fBlob(blob)
         , fUploadTarget(uploadTarget)
         , fGlyphCache(glyphCache)
+        , fFullAtlasManager(fullAtlasManager)
         , fLazyCache(lazyCache)
         , fRun(&blob->fRuns[runIdx])
         , fSubRun(&blob->fRuns[runIdx].fSubRunInfo[subRunIdx])
@@ -165,7 +209,7 @@ Regenerator::VertexRegenerator(GrAtlasTextBlob* blob, int runIdx, int subRunIdx,
     // Compute translation if any
     fSubRun->computeTranslation(fViewMatrix, x, y, &fTransX, &fTransY);
 
-    // Because the GrAtlasGlyphCache may evict the strike a blob depends on using for
+    // Because the GrGlyphCache may evict the strike a blob depends on using for
     // generating its texture coords, we have to track whether or not the strike has
     // been abandoned.  If it hasn't been abandoned, then we can use the GrGlyph*s as is
     // otherwise we have to get the new strike, and use that to get the correct glyphs.
@@ -186,9 +230,9 @@ Regenerator::VertexRegenerator(GrAtlasTextBlob* blob, int runIdx, int subRunIdx,
 }
 
 template <bool regenPos, bool regenCol, bool regenTexCoords, bool regenGlyphs>
-Regenerator::Result Regenerator::doRegen() {
+bool Regenerator::doRegen(Regenerator::Result* result) {
     static_assert(!regenGlyphs || regenTexCoords, "must regenTexCoords along regenGlyphs");
-    GrAtlasTextStrike* strike = nullptr;
+    sk_sp<GrTextStrike> strike;
     if (regenTexCoords) {
         fSubRun->resetBulkUseToken();
 
@@ -199,24 +243,23 @@ Regenerator::Result Regenerator::doRegen() {
         if (!*fLazyCache || (*fLazyCache)->getDescriptor() != *desc) {
             SkScalerContextEffects effects;
             effects.fPathEffect = fRun->fPathEffect.get();
-            effects.fRasterizer = fRun->fRasterizer.get();
             effects.fMaskFilter = fRun->fMaskFilter.get();
-            fLazyCache->reset(SkGlyphCache::DetachCache(fRun->fTypeface.get(), effects, desc));
+            *fLazyCache =
+                SkStrikeCache::FindOrCreateStrikeExclusive(*desc, effects, *fRun->fTypeface);
         }
 
         if (regenGlyphs) {
             strike = fGlyphCache->getStrike(fLazyCache->get());
         } else {
-            strike = fSubRun->strike();
+            strike = fSubRun->refStrike();
         }
     }
 
     bool hasW = fSubRun->hasWCoord();
-    Result result;
     auto vertexStride = GetVertexStride(fSubRun->maskFormat(), hasW);
     char* currVertex = fBlob->fVertices + fSubRun->vertexStartIndex() +
                        fCurrGlyph * kVerticesPerGlyph * vertexStride;
-    result.fFirstVertex = currVertex;
+    result->fFirstVertex = currVertex;
 
     for (int glyphIdx = fCurrGlyph; glyphIdx < (int)fSubRun->glyphCount(); glyphIdx++) {
         GrGlyph* glyph = nullptr;
@@ -234,22 +277,32 @@ Regenerator::Result Regenerator::doRegen() {
             glyph = fBlob->fGlyphs[glyphOffset];
             SkASSERT(glyph && glyph->fMaskFormat == fSubRun->maskFormat());
 
-            if (!fGlyphCache->hasGlyph(glyph) &&
-                !strike->addGlyphToAtlas(fUploadTarget, glyph, fLazyCache->get(),
-                                         fSubRun->maskFormat())) {
-                fBrokenRun = glyphIdx > 0;
-                result.fFinished = false;
-                return result;
+            if (!fFullAtlasManager->hasGlyph(glyph)) {
+                GrDrawOpAtlas::ErrorCode code;
+                code = strike->addGlyphToAtlas(fResourceProvider, fUploadTarget, fGlyphCache,
+                                              fFullAtlasManager, glyph,
+                                              fLazyCache->get(), fSubRun->maskFormat(),
+                                              fSubRun->hasScaledGlyphs());
+                if (GrDrawOpAtlas::ErrorCode::kError == code) {
+                    // Something horrible has happened - drop the op
+                    return false;
+                }
+                else if (GrDrawOpAtlas::ErrorCode::kTryAgain == code) {
+                    fBrokenRun = glyphIdx > 0;
+                    result->fFinished = false;
+                    return true;
+                }
             }
-            fGlyphCache->addGlyphToBulkAndSetUseToken(fSubRun->bulkUseToken(), glyph,
-                                                      fUploadTarget->nextDrawToken());
+            auto tokenTracker = fUploadTarget->tokenTracker();
+            fFullAtlasManager->addGlyphToBulkAndSetUseToken(fSubRun->bulkUseToken(), glyph,
+                                                            tokenTracker->nextDrawToken());
         }
 
         regen_vertices<regenPos, regenCol, regenTexCoords>(currVertex, glyph, vertexStride,
                                                            fSubRun->drawAsDistanceFields(), fTransX,
                                                            fTransY, fColor);
         currVertex += vertexStride * GrAtlasTextOp::kVerticesPerGlyph;
-        ++result.fGlyphsRegenerated;
+        ++result->fGlyphsRegenerated;
         ++fCurrGlyph;
     }
 
@@ -257,17 +310,17 @@ Regenerator::Result Regenerator::doRegen() {
     fSubRun->setColor(fColor);
     if (regenTexCoords) {
         if (regenGlyphs) {
-            fSubRun->setStrike(strike);
+            fSubRun->setStrike(std::move(strike));
         }
         fSubRun->setAtlasGeneration(fBrokenRun
-                                            ? GrDrawOpAtlas::kInvalidAtlasGeneration
-                                            : fGlyphCache->atlasGeneration(fSubRun->maskFormat()));
+                                    ? GrDrawOpAtlas::kInvalidAtlasGeneration
+                                    : fFullAtlasManager->atlasGeneration(fSubRun->maskFormat()));
     }
-    return result;
+    return true;
 }
 
-Regenerator::Result Regenerator::regenerate() {
-    uint64_t currentAtlasGen = fGlyphCache->atlasGeneration(fSubRun->maskFormat());
+bool Regenerator::regenerate(Regenerator::Result* result) {
+    uint64_t currentAtlasGen = fFullAtlasManager->atlasGeneration(fSubRun->maskFormat());
     // If regenerate() is called multiple times then the atlas gen may have changed. So we check
     // this each time.
     if (fSubRun->atlasGeneration() != currentAtlasGen) {
@@ -276,45 +329,46 @@ Regenerator::Result Regenerator::regenerate() {
 
     switch (static_cast<RegenMask>(fRegenFlags)) {
         case kRegenPos:
-            return this->doRegen<true, false, false, false>();
+            return this->doRegen<true, false, false, false>(result);
         case kRegenCol:
-            return this->doRegen<false, true, false, false>();
+            return this->doRegen<false, true, false, false>(result);
         case kRegenTex:
-            return this->doRegen<false, false, true, false>();
+            return this->doRegen<false, false, true, false>(result);
         case kRegenGlyph:
-            return this->doRegen<false, false, true, true>();
+            return this->doRegen<false, false, true, true>(result);
 
         // combinations
         case kRegenPosCol:
-            return this->doRegen<true, true, false, false>();
+            return this->doRegen<true, true, false, false>(result);
         case kRegenPosTex:
-            return this->doRegen<true, false, true, false>();
+            return this->doRegen<true, false, true, false>(result);
         case kRegenPosTexGlyph:
-            return this->doRegen<true, false, true, true>();
+            return this->doRegen<true, false, true, true>(result);
         case kRegenPosColTex:
-            return this->doRegen<true, true, true, false>();
+            return this->doRegen<true, true, true, false>(result);
         case kRegenPosColTexGlyph:
-            return this->doRegen<true, true, true, true>();
+            return this->doRegen<true, true, true, true>(result);
         case kRegenColTex:
-            return this->doRegen<false, true, true, false>();
+            return this->doRegen<false, true, true, false>(result);
         case kRegenColTexGlyph:
-            return this->doRegen<false, true, true, true>();
+            return this->doRegen<false, true, true, true>(result);
         case kNoRegen: {
-            Result result;
             bool hasW = fSubRun->hasWCoord();
             auto vertexStride = GetVertexStride(fSubRun->maskFormat(), hasW);
-            result.fGlyphsRegenerated = fSubRun->glyphCount() - fCurrGlyph;
-            result.fFirstVertex = fBlob->fVertices + fSubRun->vertexStartIndex() +
-                                  fCurrGlyph * kVerticesPerGlyph * vertexStride;
+            result->fFinished = true;
+            result->fGlyphsRegenerated = fSubRun->glyphCount() - fCurrGlyph;
+            result->fFirstVertex = fBlob->fVertices + fSubRun->vertexStartIndex() +
+                                    fCurrGlyph * kVerticesPerGlyph * vertexStride;
             fCurrGlyph = fSubRun->glyphCount();
 
             // set use tokens for all of the glyphs in our subrun.  This is only valid if we
             // have a valid atlas generation
-            fGlyphCache->setUseTokenBulk(*fSubRun->bulkUseToken(), fUploadTarget->nextDrawToken(),
-                                         fSubRun->maskFormat());
-            return result;
+            fFullAtlasManager->setUseTokenBulk(*fSubRun->bulkUseToken(),
+                                               fUploadTarget->tokenTracker()->nextDrawToken(),
+                                               fSubRun->maskFormat());
+            return true;
         }
     }
     SK_ABORT("Should not get here");
-    return Result();
+    return false;
 }

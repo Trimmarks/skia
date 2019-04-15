@@ -6,11 +6,12 @@
  */
 
 #include "SkTypes.h"
-#if defined(SK_BUILD_FOR_WIN32)
+#if defined(SK_BUILD_FOR_WIN)
 
 #include "SkLeanWindows.h"
 #include "SkMalloc.h"
 #include "SkOSFile.h"
+#include "SkStringUtils.h"
 #include "SkTFitsIn.h"
 
 #include <io.h>
@@ -250,7 +251,10 @@ static bool get_the_file(HANDLE handle, SkString* name, WIN32_FIND_DATAW* dataPt
     }
     // if we get here, we've found a file/dir
     if (name) {
-        name->setUTF16((uint16_t*)dataPtr->cFileName);
+        const uint16_t* utf16name = (const uint16_t*)dataPtr->cFileName;
+        const uint16_t* ptr = utf16name;
+        while (*ptr != 0) { ++ptr; }
+        *name = SkStringFromUTF16(utf16name, ptr - utf16name);
     }
     return true;
 }
@@ -273,4 +277,4 @@ bool SkOSFile::Iter::next(SkString* name, bool getDir) {
     return self.fHandle != (HANDLE)~0 && get_the_file(self.fHandle, name, dataPtr, getDir);
 }
 
-#endif//defined(SK_BUILD_FOR_WIN32)
+#endif//defined(SK_BUILD_FOR_WIN)

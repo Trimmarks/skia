@@ -34,14 +34,6 @@ SkPictureRecord::SkPictureRecord(const SkISize& dimensions, uint32_t flags)
     , fInitialSaveCount(kNoInitialSave) {
 }
 
-SkPictureRecord::~SkPictureRecord() {
-    fImageRefs.unrefAll();
-    fPictureRefs.unrefAll();
-    fDrawableRefs.unrefAll();
-    fTextBlobRefs.unrefAll();
-    fVerticesRefs.unrefAll();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 void SkPictureRecord::onFlush() {
@@ -60,8 +52,6 @@ void SkPictureRecord::willSave() {
 }
 
 void SkPictureRecord::recordSave() {
-    fContentInfo.onSave();
-
     // op only
     size_t size = sizeof(kUInt32Size);
     size_t initialOffset = this->addDraw(SAVE, &size);
@@ -85,8 +75,6 @@ SkCanvas::SaveLayerStrategy SkPictureRecord::getSaveLayerStrategy(const SaveLaye
 }
 
 void SkPictureRecord::recordSaveLayer(const SaveLayerRec& rec) {
-    fContentInfo.onSaveLayer();
-
     // op + flatflags
     size_t size = 2 * kUInt32Size;
     uint32_t flatFlags = 0;
@@ -177,8 +165,6 @@ void SkPictureRecord::willRestore() {
 }
 
 void SkPictureRecord::recordRestore(bool fillInSkips) {
-    fContentInfo.onRestore();
-
     if (fillInSkips) {
         this->fillRestoreOffsetPlaceholdersForCurrentStackLevel((uint32_t)fWriter.bytesWritten());
     }
@@ -273,8 +259,6 @@ void SkPictureRecord::fillRestoreOffsetPlaceholdersForCurrentStackLevel(uint32_t
         // assert that the final offset value points to a save verb
         uint32_t opSize;
         DrawType drawOp = peek_op_and_size(&fWriter, -offset, &opSize);
-        SkASSERT(SAVE_LAYER_SAVEFLAGS_DEPRECATED != drawOp);
-        SkASSERT(SAVE_LAYER_SAVELAYERFLAGS_DEPRECATED_JAN_2016 != drawOp);
         SkASSERT(SAVE == drawOp || SAVE_LAYER_SAVELAYERREC == drawOp);
     }
 #endif
@@ -419,8 +403,6 @@ void SkPictureRecord::onDrawPaint(const SkPaint& paint) {
 
 void SkPictureRecord::onDrawPoints(PointMode mode, size_t count, const SkPoint pts[],
                                    const SkPaint& paint) {
-    fContentInfo.onDrawPoints(count, paint);
-
     // op + paint index + mode + count + point data
     size_t size = 4 * kUInt32Size + count * sizeof(SkPoint);
     size_t initialOffset = this->addDraw(DRAW_POINTS, &size);
@@ -495,8 +477,6 @@ void SkPictureRecord::onDrawDRRect(const SkRRect& outer, const SkRRect& inner,
 }
 
 void SkPictureRecord::onDrawPath(const SkPath& path, const SkPaint& paint) {
-    fContentInfo.onDrawPath(path, paint);
-
     // op + paint index + path index
     size_t size = 3 * kUInt32Size;
     size_t initialOffset = this->addDraw(DRAW_PATH, &size);
@@ -787,7 +767,7 @@ void SkPictureRecord::onDrawAtlas(const SkImage* atlas, const SkRSXform xform[],
 
 void SkPictureRecord::onDrawShadowRec(const SkPath& path, const SkDrawShadowRec& rec) {
     // op + path index + zParams + lightPos + lightRadius + spot/ambient alphas + color + flags
-    size_t size = 2 * kUInt32Size + 2 * sizeof(SkPoint3) + 3 * sizeof(SkScalar) + 2 * kUInt32Size;
+    size_t size = 2 * kUInt32Size + 2 * sizeof(SkPoint3) + 1 * sizeof(SkScalar) + 3 * kUInt32Size;
     size_t initialOffset = this->addDraw(DRAW_SHADOW_REC, &size);
 
     this->addPath(path);
@@ -795,9 +775,8 @@ void SkPictureRecord::onDrawShadowRec(const SkPath& path, const SkDrawShadowRec&
     fWriter.writePoint3(rec.fZPlaneParams);
     fWriter.writePoint3(rec.fLightPos);
     fWriter.writeScalar(rec.fLightRadius);
-    fWriter.writeScalar(rec.fAmbientAlpha);
-    fWriter.writeScalar(rec.fSpotAlpha);
-    fWriter.write32(rec.fColor);
+    fWriter.write32(rec.fAmbientColor);
+    fWriter.write32(rec.fSpotColor);
     fWriter.write32(rec.fFlags);
 
     this->validate(initialOffset, size);
@@ -817,15 +796,28 @@ void SkPictureRecord::onDrawAnnotation(const SkRect& rect, const char key[], SkD
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template <typename T> int find_or_append_uniqueID(SkTDArray<const T*>& array, const T* obj) {
-    int index = array.select([&](const T* elem) {
-        return elem->uniqueID() == obj->uniqueID();
-    });
-    if (index < 0) {
-        index = array.count();
-        *array.append() = SkRef(obj);
+// De-duping helper.
+
+template <typename T>
+static bool equals(T* a, T* b) { return a->uniqueID() == b->uniqueID(); }
+
+template <>
+bool equals(SkDrawable* a, SkDrawable* b) {
+    // SkDrawable's generationID is not a stable unique identifier.
+    return a == b;
+}
+
+template <typename T>
+static int find_or_append(SkTArray<sk_sp<T>>& array, T* obj) {
+    for (int i = 0; i < array.count(); i++) {
+        if (equals(array[i].get(), obj)) {
+            return i;
+        }
     }
-    return index;
+
+    array.push_back(sk_ref_sp(obj));
+
+    return array.count() - 1;
 }
 
 sk_sp<SkSurface> SkPictureRecord::onNewSurface(const SkImageInfo& info, const SkSurfaceProps&) {
@@ -834,7 +826,7 @@ sk_sp<SkSurface> SkPictureRecord::onNewSurface(const SkImageInfo& info, const Sk
 
 void SkPictureRecord::addImage(const SkImage* image) {
     // convention for images is 0-based index
-    this->addInt(find_or_append_uniqueID(fImageRefs, image));
+    this->addInt(find_or_append(fImages, image));
 }
 
 void SkPictureRecord::addMatrix(const SkMatrix& matrix) {
@@ -842,8 +834,6 @@ void SkPictureRecord::addMatrix(const SkMatrix& matrix) {
 }
 
 void SkPictureRecord::addPaintPtr(const SkPaint* paint) {
-    fContentInfo.onAddPaintPtr(paint);
-
     if (paint) {
         fPaints.push_back(*paint);
         this->addInt(fPaints.count());
@@ -871,18 +861,12 @@ void SkPictureRecord::addPatch(const SkPoint cubics[12]) {
 
 void SkPictureRecord::addPicture(const SkPicture* picture) {
     // follow the convention of recording a 1-based index
-    this->addInt(find_or_append_uniqueID(fPictureRefs, picture) + 1);
+    this->addInt(find_or_append(fPictures, picture) + 1);
 }
 
 void SkPictureRecord::addDrawable(SkDrawable* drawable) {
-    int index = fDrawableRefs.find(drawable);
-    if (index < 0) {    // not found
-        index = fDrawableRefs.count();
-        *fDrawableRefs.append() = drawable;
-        drawable->ref();
-    }
     // follow the convention of recording a 1-based index
-    this->addInt(index + 1);
+    this->addInt(find_or_append(fDrawables, drawable) + 1);
 }
 
 void SkPictureRecord::addPoint(const SkPoint& point) {
@@ -927,19 +911,18 @@ void SkPictureRecord::addRegion(const SkRegion& region) {
 }
 
 void SkPictureRecord::addText(const void* text, size_t byteLength) {
-    fContentInfo.onDrawText();
     addInt(SkToInt(byteLength));
     fWriter.writePad(text, byteLength);
 }
 
 void SkPictureRecord::addTextBlob(const SkTextBlob* blob) {
     // follow the convention of recording a 1-based index
-    this->addInt(find_or_append_uniqueID(fTextBlobRefs, blob) + 1);
+    this->addInt(find_or_append(fTextBlobs, blob) + 1);
 }
 
 void SkPictureRecord::addVertices(const SkVertices* vertices) {
     // follow the convention of recording a 1-based index
-    this->addInt(find_or_append_uniqueID(fVerticesRefs, vertices) + 1);
+    this->addInt(find_or_append(fVertices, vertices) + 1);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

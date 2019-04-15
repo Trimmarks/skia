@@ -6,7 +6,6 @@
  */
 
 #include "SkColorSpace.h"
-#include "SkColorSpace_Base.h"
 #include "SkColorSpace_XYZ.h"
 #include "SkColorSpacePriv.h"
 #include "SkPoint3.h"
@@ -115,15 +114,6 @@ sk_sp<SkColorSpace> SkColorSpace::MakeRGB(SkGammaNamed gammaNamed, const SkMatri
                 return SkColorSpace::MakeSRGB();
             }
             break;
-#ifdef SK_SUPPORT_LEGACY_ADOBE_XYZ
-        case k2Dot2Curve_SkGammaNamed:
-            if (xyz_almost_equal(toXYZD50, gAdobeRGB_toXYZD50)) {
-                SkMatrix44 adobe44(SkMatrix44::kUninitialized_Constructor);
-                adobe44.set3x3RowMajorf(gAdobeRGB_toXYZD50);
-                return sk_sp<SkColorSpace>(new SkColorSpace_XYZ(k2Dot2Curve_SkGammaNamed, adobe44));
-            }
-            break;
-#endif
         case kLinear_SkGammaNamed:
             if (xyz_almost_equal(toXYZD50, gSRGB_toXYZD50)) {
                 return SkColorSpace::MakeSRGBLinear();
@@ -336,8 +326,8 @@ size_t SkColorSpace::writeToMemory(void* memory) const {
     // Start by trying the serialization fast path.  If we haven't saved ICC profile data,
     // we must have a profile that we can serialize easily.
     if (!this->onProfileData()) {
-        // Profile data is mandatory for A2B0 color spaces.
-        SkASSERT(SkColorSpace_Base::Type::kA2B != as_CSB(this)->type());
+        // Profile data is mandatory for A2B0 color spaces, so we must be XYZ.
+        SkASSERT(this->toXYZD50());
         // If we have a named profile, only write the enum.
         const SkGammaNamed gammaNamed = this->gammaNamed();
         if (this == srgb()) {
@@ -510,6 +500,10 @@ bool SkColorSpace::Equals(const SkColorSpace* src, const SkColorSpace* dst) {
         return false;
     }
 
+    if (src->nonlinearBlending() != dst->nonlinearBlending()) {
+        return false;
+    }
+
     const SkData* srcData = src->onProfileData();
     const SkData* dstData = dst->onProfileData();
     if (srcData || dstData) {
@@ -575,7 +569,7 @@ SkColorSpaceTransferFn SkColorSpaceTransferFn::invert() const {
     // find inverse for the other segment (if possible)
     if (transfer_fn_almost_equal(0.f, fA) || transfer_fn_almost_equal(0.f, fG)) {
         // otherwise assume it should be 1 as it is the top segment
-        // as you can't invert the constant functions y = b^g + c, or y = 1 + c
+        // as you can't invert the constant functions y = b^g + e, or y = 1 + e
         inv.fG = 1.f;
         inv.fE = 1.f;
     } else {

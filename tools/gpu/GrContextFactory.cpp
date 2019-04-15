@@ -7,6 +7,7 @@
  */
 
 #include "GrContextFactory.h"
+#include "GrContextPriv.h"
 #include "gl/GLTestContext.h"
 
 #if SK_ANGLE
@@ -25,7 +26,7 @@
 #include "mock/MockTestContext.h"
 #include "GrCaps.h"
 
-#if defined(SK_BUILD_FOR_WIN32) && defined(SK_ENABLE_DISCRETE_GPU)
+#if defined(SK_BUILD_FOR_WIN) && defined(SK_ENABLE_DISCRETE_GPU)
 extern "C" {
     // NVIDIA documents that the presence and value of this symbol programmatically enable the high
     // performance GPU in laptops with switchable graphics.
@@ -275,12 +276,12 @@ ContextInfo GrContextFactory::getContextInfoInternal(ContextType type, ContextOv
         return ContextInfo();
     }
     if (ContextOverrides::kRequireNVPRSupport & overrides) {
-        if (!grCtx->caps()->shaderCaps()->pathRenderingSupport()) {
+        if (!grCtx->contextPriv().caps()->shaderCaps()->pathRenderingSupport()) {
             return ContextInfo();
         }
     }
     if (ContextOverrides::kRequireSRGBSupport & overrides) {
-        if (!grCtx->caps()->srgbSupport()) {
+        if (!grCtx->contextPriv().caps()->srgbSupport()) {
             return ContextInfo();
         }
     }

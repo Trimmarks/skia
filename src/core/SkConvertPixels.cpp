@@ -5,7 +5,6 @@
  * found in the LICENSE file.
  */
 
-#include "SkColorSpaceXform_Base.h"
 #include "SkColorSpaceXformPriv.h"
 #include "SkColorSpacePriv.h"
 #include "SkColorTable.h"
@@ -119,7 +118,7 @@ static inline bool optimized_color_xform(const SkImageInfo& dstInfo, const SkIma
     return true;
 }
 
-static inline void apply_color_xform(const SkImageInfo& dstInfo, void* dstPixels, size_t dstRB,
+static inline bool apply_color_xform(const SkImageInfo& dstInfo, void* dstPixels, size_t dstRB,
                                      const SkImageInfo& srcInfo, const void* srcPixels,
                                      size_t srcRB, SkTransferFunctionBehavior behavior) {
     SkColorSpaceXform::ColorFormat dstFormat = select_xform_format(dstInfo.colorType());
@@ -149,8 +148,10 @@ static inline void apply_color_xform(const SkImageInfo& dstInfo, void* dstPixels
     }
 
     std::unique_ptr<SkColorSpaceXform> xform =
-            SkColorSpaceXform_Base::New(srcInfo.colorSpace(), dstInfo.colorSpace(), behavior);
-    SkASSERT(xform);
+            SkMakeColorSpaceXform(srcInfo.colorSpace(), dstInfo.colorSpace(), behavior);
+    if (!xform) {
+        return false;
+    }
 
     for (int y = 0; y < dstInfo.height(); y++) {
         SkAssertResult(xform->apply(dstFormat, dstPixels, srcFormat, srcPixels, dstInfo.width(),
@@ -158,6 +159,7 @@ static inline void apply_color_xform(const SkImageInfo& dstInfo, void* dstPixels
         dstPixels = SkTAddOffset<void>(dstPixels, dstRB);
         srcPixels = SkTAddOffset<const void>(srcPixels, srcRB);
     }
+    return true;
 }
 
 // Fast Path 4: Alpha 8 dsts.
@@ -178,6 +180,30 @@ static void convert_to_alpha8(uint8_t* dst, size_t dstRB, const SkImageInfo& src
             for (int y = 0; y < srcInfo.height(); y++) {
                 for (int x = 0; x < srcInfo.width(); x++) {
                     dst[x] = src32[x] >> 24;
+                }
+                dst = SkTAddOffset<uint8_t>(dst, dstRB);
+                src32 = SkTAddOffset<const uint32_t>(src32, srcRB);
+            }
+            break;
+        }
+        case kRGBA_1010102_SkColorType: {
+            auto src32 = (const uint32_t*) src;
+            for (int y = 0; y < srcInfo.height(); y++) {
+                for (int x = 0; x < srcInfo.width(); x++) {
+                    switch (src32[x] >> 30) {
+                        case 0:
+                            dst[x] = 0;
+                            break;
+                        case 1:
+                            dst[x] = 0x55;
+                            break;
+                        case 2:
+                            dst[x] = 0xAA;
+                            break;
+                        case 3:
+                            dst[x] = 0xFF;
+                            break;
+                    }
                 }
                 dst = SkTAddOffset<uint8_t>(dst, dstRB);
                 src32 = SkTAddOffset<const uint32_t>(src32, srcRB);
@@ -225,8 +251,19 @@ static void convert_with_pipeline(const SkImageInfo& dstInfo, void* dstRow, size
         case kRGBA_8888_SkColorType:
             pipeline.append(SkRasterPipeline::load_8888, &src);
             break;
+        case kRGB_888x_SkColorType:
+            pipeline.append(SkRasterPipeline::load_8888, &src);
+            pipeline.append(SkRasterPipeline::force_opaque);
+            break;
         case kBGRA_8888_SkColorType:
             pipeline.append(SkRasterPipeline::load_bgra, &src);
+            break;
+        case kRGBA_1010102_SkColorType:
+            pipeline.append(SkRasterPipeline::load_1010102, &src);
+            break;
+        case kRGB_101010x_SkColorType:
+            pipeline.append(SkRasterPipeline::load_1010102, &src);
+            pipeline.append(SkRasterPipeline::force_opaque);
             break;
         case kRGB_565_SkColorType:
             pipeline.append(SkRasterPipeline::load_565, &src);
@@ -325,8 +362,19 @@ static void convert_with_pipeline(const SkImageInfo& dstInfo, void* dstRow, size
         case kRGBA_8888_SkColorType:
             pipeline.append(SkRasterPipeline::store_8888, &dst);
             break;
+        case kRGB_888x_SkColorType:
+            pipeline.append(SkRasterPipeline::force_opaque);
+            pipeline.append(SkRasterPipeline::store_8888, &dst);
+            break;
         case kBGRA_8888_SkColorType:
             pipeline.append(SkRasterPipeline::store_bgra, &dst);
+            break;
+        case kRGBA_1010102_SkColorType:
+            pipeline.append(SkRasterPipeline::store_1010102, &dst);
+            break;
+        case kRGB_101010x_SkColorType:
+            pipeline.append(SkRasterPipeline::force_opaque);
+            pipeline.append(SkRasterPipeline::store_1010102, &dst);
             break;
         case kRGB_565_SkColorType:
             pipeline.append(SkRasterPipeline::store_565, &dst);
@@ -345,6 +393,16 @@ static void convert_with_pipeline(const SkImageInfo& dstInfo, void* dstRow, size
     pipeline.run(0,0, srcInfo.width(), srcInfo.height());
 }
 
+static bool swizzle_and_multiply_color_type(SkColorType ct) {
+    switch (ct) {
+        case kRGBA_8888_SkColorType:
+        case kBGRA_8888_SkColorType:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void SkConvertPixels(const SkImageInfo& dstInfo, void* dstPixels, size_t dstRB,
                      const SkImageInfo& srcInfo, const void* srcPixels, size_t srcRB,
                      SkColorTable* ctable, SkTransferFunctionBehavior behavior) {
@@ -361,15 +419,17 @@ void SkConvertPixels(const SkImageInfo& dstInfo, void* dstPixels, size_t dstRB,
     SkASSERT(srcInfo.colorSpace() || !isColorAware);
 
     // Fast Path 2: Simple swizzles and premuls.
-    if (4 == srcInfo.bytesPerPixel() && 4 == dstInfo.bytesPerPixel() && !isColorAware) {
+    if (swizzle_and_multiply_color_type(srcInfo.colorType()) &&
+        swizzle_and_multiply_color_type(dstInfo.colorType()) && !isColorAware) {
         swizzle_and_multiply(dstInfo, dstPixels, dstRB, srcInfo, srcPixels, srcRB);
         return;
     }
 
     // Fast Path 3: Color space xform.
     if (isColorAware && optimized_color_xform(dstInfo, srcInfo, behavior)) {
-        apply_color_xform(dstInfo, dstPixels, dstRB, srcInfo, srcPixels, srcRB, behavior);
-        return;
+        if (apply_color_xform(dstInfo, dstPixels, dstRB, srcInfo, srcPixels, srcRB, behavior)) {
+            return;
+        }
     }
 
     // Fast Path 4: Alpha 8 dsts.

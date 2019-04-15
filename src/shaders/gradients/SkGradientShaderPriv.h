@@ -11,7 +11,6 @@
 #include "SkGradientShader.h"
 
 #include "SkArenaAlloc.h"
-#include "SkAutoMalloc.h"
 #include "SkMatrix.h"
 #include "SkShaderBase.h"
 #include "SkTArray.h"
@@ -54,13 +53,9 @@ public:
         SkScalar* mutablePos() { return const_cast<SkScalar*>(fPos); }
 
     private:
-        enum {
-            kStorageCount = 16
-        };
-        SkColor4f fColorStorage[kStorageCount];
-        SkScalar fPosStorage[kStorageCount];
-        SkMatrix fLocalMatrixStorage;
-        SkAutoMalloc fDynamicStorage;
+        SkSTArray<16, SkColor4f, true> fColorStorage;
+        SkSTArray<16, SkScalar , true> fPosStorage;
+        SkMatrix                       fLocalMatrixStorage;
     };
 
     SkGradientShaderBase(const Descriptor& desc, const SkMatrix& ptsToUnit);
@@ -85,7 +80,7 @@ protected:
 
     SkGradientShaderBase(SkReadBuffer& );
     void flatten(SkWriteBuffer&) const override;
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
 
     void commonAsAGradient(GradientInfo*) const;
 
@@ -209,6 +204,10 @@ public:
                 case SkShader::kMirror_TileMode:
                     fWrapMode = GrSamplerState::WrapMode::kMirrorRepeat;
                     break;
+                case SkShader::kDecal_TileMode:
+                    // TODO: actually support decal
+                    fWrapMode = GrSamplerState::WrapMode::kClamp;
+                    break;
             }
         }
 
@@ -280,7 +279,7 @@ protected:
         } else {
             fp = std::move(gradientFP);
         }
-        return GrFragmentProcessor::MulOutputByInputAlpha(std::move(fp));
+        return GrFragmentProcessor::MulChildByInputAlpha(std::move(fp));
     }
 
 #if GR_TEST_UTILS
@@ -329,7 +328,7 @@ private:
     GrCoordTransform fCoordTransform;
     TextureSampler fTextureSampler;
     SkScalar fYCoord;
-    GrTextureStripAtlas* fAtlas;
+    sk_sp<GrTextureStripAtlas> fAtlas;
     int fRow;
     bool fIsOpaque;
 

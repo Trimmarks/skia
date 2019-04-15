@@ -30,42 +30,35 @@ GR_DECLARE_STATIC_UNIQUE_KEY(gQuadIndexBufferKey);
 
 const uint32_t GrResourceProvider::kMinScratchTextureSize = 16;
 
+#ifdef SK_DISABLE_EXPLICIT_GPU_RESOURCE_ALLOCATION
+static const bool kDefaultExplicitlyAllocateGPUResources = false;
+#else
+static const bool kDefaultExplicitlyAllocateGPUResources = true;
+#endif
+
 #define ASSERT_SINGLE_OWNER \
     SkDEBUGCODE(GrSingleOwner::AutoEnforce debug_SingleOwner(fSingleOwner);)
 
-GrResourceProvider::GrResourceProvider(GrGpu* gpu, GrResourceCache* cache, GrSingleOwner* owner)
+GrResourceProvider::GrResourceProvider(GrGpu* gpu, GrResourceCache* cache, GrSingleOwner* owner,
+                                       GrContextOptions::Enable explicitlyAllocateGPUResources)
         : fCache(cache)
         , fGpu(gpu)
 #ifdef SK_DEBUG
         , fSingleOwner(owner)
 #endif
-        {
+{
+    if (GrContextOptions::Enable::kNo == explicitlyAllocateGPUResources) {
+        fExplicitlyAllocateGPUResources = false;
+    } else if (GrContextOptions::Enable::kYes == explicitlyAllocateGPUResources) {
+        fExplicitlyAllocateGPUResources = true;
+    } else {
+        fExplicitlyAllocateGPUResources = kDefaultExplicitlyAllocateGPUResources;
+    }
+
     fCaps = sk_ref_sp(fGpu->caps());
 
     GR_DEFINE_STATIC_UNIQUE_KEY(gQuadIndexBufferKey);
     fQuadIndexBufferKey = gQuadIndexBufferKey;
-}
-
-bool validate_desc(const GrSurfaceDesc& desc, const GrCaps& caps, int levelCount = 0) {
-    if (desc.fWidth <= 0 || desc.fHeight <= 0) {
-        return false;
-    }
-    if (!caps.isConfigTexturable(desc.fConfig)) {
-        return false;
-    }
-    if (desc.fFlags & kRenderTarget_GrSurfaceFlag) {
-        if (!caps.isConfigRenderable(desc.fConfig, desc.fSampleCnt > 0)) {
-            return false;
-        }
-    } else {
-        if (desc.fSampleCnt) {
-            return false;
-        }
-    }
-    if (levelCount > 1 && (GrPixelConfigIsSint(desc.fConfig) || !caps.mipMapSupport())) {
-        return false;
-    }
-    return true;
 }
 
 sk_sp<GrTexture> GrResourceProvider::createTexture(const GrSurfaceDesc& desc, SkBudgeted budgeted,
@@ -79,7 +72,8 @@ sk_sp<GrTexture> GrResourceProvider::createTexture(const GrSurfaceDesc& desc, Sk
         return nullptr;
     }
 
-    if (!validate_desc(desc, *fCaps, mipLevelCount)) {
+    GrMipMapped mipMapped = mipLevelCount > 1 ? GrMipMapped::kYes : GrMipMapped::kNo;
+    if (!fCaps->validateSurfaceDesc(desc, mipMapped)) {
         return nullptr;
     }
 
@@ -101,18 +95,9 @@ sk_sp<GrTexture> GrResourceProvider::getExactScratch(const GrSurfaceDesc& desc,
     return tex;
 }
 
-static bool make_info(int w, int h, GrPixelConfig config, SkImageInfo* ii) {
-    SkColorType colorType;
-    if (!GrPixelConfigToColorType(config, &colorType)) {
-        return false;
-    }
-
-    *ii = SkImageInfo::Make(w, h, colorType, kUnknown_SkAlphaType, nullptr);
-    return true;
-}
-
 sk_sp<GrTexture> GrResourceProvider::createTexture(const GrSurfaceDesc& desc,
                                                    SkBudgeted budgeted,
+                                                   SkBackingFit fit,
                                                    const GrMipLevel& mipLevel) {
     ASSERT_SINGLE_OWNER
 
@@ -124,44 +109,53 @@ sk_sp<GrTexture> GrResourceProvider::createTexture(const GrSurfaceDesc& desc,
         return nullptr;
     }
 
-    if (!validate_desc(desc, *fCaps)) {
+    if (!fCaps->validateSurfaceDesc(desc, GrMipMapped::kNo)) {
         return nullptr;
     }
 
     GrContext* context = fGpu->getContext();
     GrProxyProvider* proxyProvider = context->contextPriv().proxyProvider();
 
-    SkImageInfo srcInfo;
-
-    if (make_info(desc.fWidth, desc.fHeight, desc.fConfig, &srcInfo)) {
+    SkColorType colorType;
+    if (GrPixelConfigToColorType(desc.fConfig, &colorType)) {
         // DDL TODO: remove this use of createInstantiatedProxy and convert it to a testing-only
         // method.
-        sk_sp<GrTextureProxy> proxy = proxyProvider->createInstantiatedProxy(desc,
-                                                                             SkBackingFit::kExact,
-                                                                             budgeted);
-        if (proxy) {
-            sk_sp<GrSurfaceContext> sContext =
-                       context->contextPriv().makeWrappedSurfaceContext(std::move(proxy), nullptr);
-            if (sContext) {
-                if (sContext->writePixels(srcInfo, mipLevel.fPixels, mipLevel.fRowBytes, 0, 0)) {
-                    return sk_ref_sp(sContext->asTextureProxy()->priv().peekTexture());
-                }
-            }
+        sk_sp<GrTextureProxy> proxy = proxyProvider->createInstantiatedProxy(
+                desc, kTopLeft_GrSurfaceOrigin, fit, budgeted);
+        if (!proxy) {
+            return nullptr;
         }
+        // We use an ephemeral surface context to do the write pixels. Here it isn't clear what
+        // color space to tag it with. That's ok because GrSurfaceContext::writePixels doesn't
+        // do any color space conversions. Though, that is likely to change. However, if the
+        // pixel config is sRGB then the passed color space here must have sRGB gamma or
+        // GrSurfaceContext creation fails.
+        sk_sp<SkColorSpace> colorSpace;
+        if (GrPixelConfigIsSRGB(desc.fConfig)) {
+            colorSpace = SkColorSpace::MakeSRGB();
+        }
+        auto srcInfo = SkImageInfo::Make(desc.fWidth, desc.fHeight, colorType,
+                                         kUnknown_SkAlphaType, colorSpace);
+        sk_sp<GrSurfaceContext> sContext = context->contextPriv().makeWrappedSurfaceContext(
+                std::move(proxy), std::move(colorSpace));
+        if (!sContext) {
+            return nullptr;
+        }
+        SkAssertResult(sContext->writePixels(srcInfo, mipLevel.fPixels, mipLevel.fRowBytes, 0, 0));
+        return sk_ref_sp(sContext->asTextureProxy()->priv().peekTexture());
+    } else {
+        return fGpu->createTexture(desc, budgeted, &mipLevel, 1);
     }
-
-    return fGpu->createTexture(desc, budgeted, &mipLevel, 1);
 }
 
 sk_sp<GrTexture> GrResourceProvider::createTexture(const GrSurfaceDesc& desc, SkBudgeted budgeted,
                                                    uint32_t flags) {
     ASSERT_SINGLE_OWNER
-
     if (this->isAbandoned()) {
         return nullptr;
     }
 
-    if (!validate_desc(desc, *fCaps)) {
+    if (!fCaps->validateSurfaceDesc(desc, GrMipMapped::kNo)) {
         return nullptr;
     }
 
@@ -182,7 +176,7 @@ sk_sp<GrTexture> GrResourceProvider::createApproxTexture(const GrSurfaceDesc& de
         return nullptr;
     }
 
-    if (!validate_desc(desc, *fCaps)) {
+    if (!fCaps->validateSurfaceDesc(desc, GrMipMapped::kNo)) {
         return nullptr;
     }
 
@@ -211,7 +205,7 @@ sk_sp<GrTexture> GrResourceProvider::refScratchTexture(const GrSurfaceDesc& desc
                                                        uint32_t flags) {
     ASSERT_SINGLE_OWNER
     SkASSERT(!this->isAbandoned());
-    SkASSERT(validate_desc(desc, *fCaps));
+    SkASSERT(fCaps->validateSurfaceDesc(desc, GrMipMapped::kNo));
 
     // We could make initial clears work with scratch textures but it is a rare case so we just opt
     // to fall back to making a new texture.
@@ -286,7 +280,7 @@ sk_sp<const GrBuffer> GrResourceProvider::findOrMakeStaticBuffer(GrBufferType in
                                                                  const void* data,
                                                                  const GrUniqueKey& key) {
     if (auto buffer = this->findByUniqueKey<GrBuffer>(key)) {
-        return buffer;
+        return std::move(buffer);
     }
     if (auto buffer = this->createBuffer(size, intendedType, kStatic_GrAccessPattern, 0,
                                          data)) {
@@ -354,25 +348,6 @@ sk_sp<GrPath> GrResourceProvider::createPath(const SkPath& path, const GrStyle& 
 
     SkASSERT(this->gpu()->pathRendering());
     return this->gpu()->pathRendering()->createPath(path, style);
-}
-
-sk_sp<GrPathRange> GrResourceProvider::createPathRange(GrPathRange::PathGenerator* gen,
-                                                       const GrStyle& style) {
-    if (this->isAbandoned()) {
-        return nullptr;
-    }
-
-    SkASSERT(this->gpu()->pathRendering());
-    return this->gpu()->pathRendering()->createPathRange(gen, style);
-}
-
-sk_sp<GrPathRange> GrResourceProvider::createGlyphs(const SkTypeface* tf,
-                                                    const SkScalerContextEffects& effects,
-                                                    const SkDescriptor* desc,
-                                                    const GrStyle& style) {
-
-    SkASSERT(this->gpu()->pathRendering());
-    return this->gpu()->pathRendering()->createGlyphs(tf, effects, desc, style);
 }
 
 GrBuffer* GrResourceProvider::createBuffer(size_t size, GrBufferType intendedType,

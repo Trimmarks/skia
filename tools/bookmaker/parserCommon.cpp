@@ -6,7 +6,6 @@
  */
 
 #include "bookmaker.h"
-
 #include "SkOSFile.h"
 #include "SkOSPath.h"
 
@@ -15,15 +14,22 @@ static void debug_out(int len, const char* data) {
     SkDebugf("%.*s", len, data);
 }
 
-bool ParserCommon::parseFile(const char* fileOrPath, const char* suffix) {
+bool ParserCommon::parseFile(const char* fileOrPath, const char* suffix, OneFile oneFile) {
     if (!sk_isdir(fileOrPath)) {
         if (!this->parseFromFile(fileOrPath)) {
             SkDebugf("failed to parse %s\n", fileOrPath);
             return false;
         }
-    } else {
+    } else if (OneFile::kNo == oneFile) {
         SkOSFile::Iter it(fileOrPath, suffix);
         for (SkString file; it.next(&file); ) {
+            // FIXME: skip difficult file for now
+            if (string::npos != string(file.c_str()).find("SkFontArguments")) {
+                continue;
+            }
+            if (string::npos != string(file.c_str()).find("SkFontStyle")) {
+                continue;
+            }
             SkString p = SkOSPath::Join(fileOrPath, file.c_str());
             const char* hunk = p.c_str();
             if (!SkStrEndsWith(hunk, suffix)) {
@@ -155,6 +161,7 @@ bool ParserCommon::writeBlockTrim(int size, const char* data) {
         debug_out(size, data);
     }
     fprintf(fOut, "%.*s", size, data);
+    fWroteSomething = true;
     int added = 0;
     fLastChar = data[size - 1];
     while (size > 0 && '\n' != data[--size]) {

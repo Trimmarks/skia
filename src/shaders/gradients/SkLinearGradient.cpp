@@ -55,12 +55,18 @@ void SkLinearGradient::flatten(SkWriteBuffer& buffer) const {
 SkShaderBase::Context* SkLinearGradient::onMakeContext(
     const ContextRec& rec, SkArenaAlloc* alloc) const
 {
-    return CheckedMakeContext<LinearGradient4fContext>(alloc, *this, rec);
+    return fTileMode != kDecal_TileMode
+        ? CheckedMakeContext<LinearGradient4fContext>(alloc, *this, rec)
+        : nullptr;
 }
 
 SkShaderBase::Context* SkLinearGradient::onMakeBurstPipelineContext(
     const ContextRec& rec, SkArenaAlloc* alloc) const {
 
+    if (fTileMode == SkShader::kDecal_TileMode) {
+        // we only support decal w/ stages
+        return nullptr;
+    }
     // Raster pipeline has a 2-stop specialization faster than our burst.
     return fColorCount > 2 ? CheckedMakeContext<LinearGradient4fContext>(alloc, *this, rec)
                            : nullptr;
@@ -185,19 +191,12 @@ void GrLinearGradient::GLSLLinearProcessor::emitCode(EmitArgs& args) {
 /////////////////////////////////////////////////////////////////////
 
 std::unique_ptr<GrFragmentProcessor> SkLinearGradient::asFragmentProcessor(
-        const AsFPArgs& args) const {
+        const GrFPArgs& args) const {
     SkASSERT(args.fContext);
 
     SkMatrix matrix;
-    if (!this->getLocalMatrix().invert(&matrix)) {
+    if (!this->totalLocalMatrix(args.fPreLocalMatrix, args.fPostLocalMatrix)->invert(&matrix)) {
         return nullptr;
-    }
-    if (args.fLocalMatrix) {
-        SkMatrix inv;
-        if (!args.fLocalMatrix->invert(&inv)) {
-            return nullptr;
-        }
-        matrix.postConcat(inv);
     }
     matrix.postConcat(fPtsToUnit);
 
@@ -208,7 +207,6 @@ std::unique_ptr<GrFragmentProcessor> SkLinearGradient::asFragmentProcessor(
 
 #endif
 
-#ifndef SK_IGNORE_TO_STRING
 void SkLinearGradient::toString(SkString* str) const {
     str->append("SkLinearGradient (");
 
@@ -219,4 +217,4 @@ void SkLinearGradient::toString(SkString* str) const {
 
     str->append(")");
 }
-#endif
+

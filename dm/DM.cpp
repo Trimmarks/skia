@@ -5,7 +5,6 @@
  * found in the LICENSE file.
  */
 
-#include "DMFontMgr.h"
 #include "DMJsonWriter.h"
 #include "DMSrcSink.h"
 #include "ProcStats.h"
@@ -37,6 +36,7 @@
 #include "SkPngEncoder.h"
 #include "SkScan.h"
 #include "SkSpinlock.h"
+#include "SkTestFontMgr.h"
 #include "SkTHash.h"
 #include "SkTaskGroup.h"
 #include "SkTypeface_win.h"
@@ -56,8 +56,12 @@ extern void SkPDFImageDumpStats();
 
 #include <stdlib.h>
 
-#ifndef SK_BUILD_FOR_WIN32
+#ifndef SK_BUILD_FOR_WIN
     #include <unistd.h>
+#endif
+
+#if defined(SK_BUILD_FOR_ANDROID_FRAMEWORK) && defined(SK_HAS_HEIF_LIBRARY)
+#include <binder/IPCThreadState.h>
 #endif
 
 extern bool gSkForceRasterPipelineBlitter;
@@ -93,14 +97,10 @@ DEFINE_int32(shard,  0, "Which shard do I run?");
 DEFINE_string(mskps, "", "Directory to read mskps from, or a single mskp file.");
 DEFINE_bool(forceRasterPipeline, false, "sets gSkForceRasterPipelineBlitter");
 
-DEFINE_bool(ddl, false, "If true, use DeferredDisplayLists for GPU SKP rendering.");
-
 DEFINE_bool(ignoreSigInt, false, "ignore SIGINT signals during test execution");
 
 DEFINE_string(dont_write, "", "File extensions to skip writing to --writePath.");  // See skia:6821
 
-DEFINE_bool(nativeFonts, true, "If true, use native font manager and rendering. "
-                               "If false, fonts will draw as portably as possible.");
 DEFINE_bool(gdi, false, "On Windows, use GDI instead of DirectWrite for font rendering.");
 
 using namespace DM;
@@ -212,7 +212,7 @@ static void find_culprit() {
     }
 }
 
-#if defined(SK_BUILD_FOR_WIN32)
+#if defined(SK_BUILD_FOR_WIN)
     static LONG WINAPI crash_handler(EXCEPTION_POINTERS* e) {
         static const struct {
             const char* name;
@@ -263,7 +263,7 @@ static void find_culprit() {
         return x > max_of(rest...) ? x : max_of(rest...);
     }
 
-    static void (*previous_handler[max_of(SIGABRT,SIGBUS,SIGFPE,SIGILL,SIGSEGV)+1])(int);
+    static void (*previous_handler[max_of(SIGABRT,SIGBUS,SIGFPE,SIGILL,SIGSEGV,SIGTERM)+1])(int);
 
     static void crash_handler(int sig) {
         SkAutoMutexAcquire lock(gMutex);
@@ -289,11 +289,21 @@ static void find_culprit() {
         raise(sig);
     }
 
+    static void term_handler(int sig) {
+        info("\nWe have been politely asked to die by %s (%d)."
+             "\nCurrently using %dMB RAM, peak %dMB.\n",
+             strsignal(sig), sig,
+             sk_tools::getCurrResidentSetSizeMB(), sk_tools::getMaxResidentSetSizeMB());
+        signal(sig, previous_handler[sig]);
+        raise(sig);
+    }
+
     static void setup_crash_handler() {
         const int kSignals[] = { SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGSEGV };
         for (int sig : kSignals) {
             previous_handler[sig] = signal(sig, crash_handler);
         }
+        previous_handler[SIGTERM] = signal(SIGTERM, term_handler);
 
         if (FLAGS_ignoreSigInt) {
             signal(SIGINT, SIG_IGN);
@@ -339,7 +349,7 @@ static void gather_gold() {
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
-#if defined(SK_BUILD_FOR_WIN32)
+#if defined(SK_BUILD_FOR_WIN)
     static const char* kNewline = "\r\n";
 #else
     static const char* kNewline = "\n";
@@ -778,13 +788,9 @@ static bool gather_srcs() {
         push_src("gm", "", new GMSrc(r->factory()));
     }
 
-    if (FLAGS_ddl) {
-        gather_file_srcs<DDLSKPSrc>(FLAGS_skps, "skp");
-    } else {
-        gather_file_srcs<SKPSrc>(FLAGS_skps, "skp");
-    }
+    gather_file_srcs<SKPSrc>(FLAGS_skps, "skp");
     gather_file_srcs<MSKPSrc>(FLAGS_mskps, "mskp");
-#if !defined(SK_BUILD_FOR_GOOGLE3)
+#if defined(SK_ENABLE_SKOTTIE)
     gather_file_srcs<SkottieSrc>(FLAGS_jsons, "json");
 #endif
 #if defined(SK_XML)
@@ -872,33 +878,47 @@ static Sink* create_sink(const GrContextOptions& grCtxOptions, const SkCommandLi
                 return nullptr;
             }
             if (gpuConfig->getTestThreading()) {
-                return new GPUThreadTestingSink(contextType, contextOverrides,
-                                                gpuConfig->getSamples(), gpuConfig->getUseDIText(),
-                                                gpuConfig->getColorType(),
-                                                gpuConfig->getAlphaType(),
-                                                sk_ref_sp(gpuConfig->getColorSpace()),
-                                                FLAGS_gpu_threading, grCtxOptions);
+                return new GPUThreadTestingSink(
+                        contextType, contextOverrides, gpuConfig->getSurfType(),
+                        gpuConfig->getSamples(), gpuConfig->getUseDIText(),
+                        gpuConfig->getColorType(), gpuConfig->getAlphaType(),
+                        sk_ref_sp(gpuConfig->getColorSpace()), FLAGS_gpu_threading, grCtxOptions);
             } else {
-                return new GPUSink(contextType, contextOverrides, gpuConfig->getSamples(),
-                                   gpuConfig->getUseDIText(), gpuConfig->getColorType(),
-                                   gpuConfig->getAlphaType(), sk_ref_sp(gpuConfig->getColorSpace()),
-                                   FLAGS_gpu_threading, grCtxOptions);
+                return new GPUSink(contextType, contextOverrides, gpuConfig->getSurfType(),
+                                   gpuConfig->getSamples(), gpuConfig->getUseDIText(),
+                                   gpuConfig->getColorType(), gpuConfig->getAlphaType(),
+                                   sk_ref_sp(gpuConfig->getColorSpace()), FLAGS_gpu_threading,
+                                   grCtxOptions);
             }
         }
     }
 #endif
+    if (const SkCommandLineConfigSvg* svgConfig = config->asConfigSvg()) {
+        int pageIndex = svgConfig->getPageIndex();
+        return new SVGSink(pageIndex);
+    }
 
 #define SINK(t, sink, ...) if (config->getBackend().equals(t)) { return new sink(__VA_ARGS__); }
 
     if (FLAGS_cpu) {
         auto srgbColorSpace = SkColorSpace::MakeSRGB();
         auto srgbLinearColorSpace = SkColorSpace::MakeSRGBLinear();
+        auto esrgb = SkColorSpace::MakeSRGB()->makeNonlinearBlending();
 
         SINK("g8",      RasterSink, kGray_8_SkColorType);
         SINK("565",     RasterSink, kRGB_565_SkColorType);
+        SINK("4444",    RasterSink, kARGB_4444_SkColorType);
         SINK("8888",    RasterSink, kN32_SkColorType);
         SINK("srgb",    RasterSink, kN32_SkColorType, srgbColorSpace);
+        SINK("rgba",    RasterSink, kRGBA_8888_SkColorType);
+        SINK("bgra",    RasterSink, kBGRA_8888_SkColorType);
+        SINK("rgbx",    RasterSink, kRGB_888x_SkColorType);
+        SINK("1010102", RasterSink, kRGBA_1010102_SkColorType);
+        SINK("101010x", RasterSink, kRGB_101010x_SkColorType);
         SINK("f16",     RasterSink, kRGBA_F16_SkColorType, srgbLinearColorSpace);
+        SINK("esrgb",   RasterSink, kRGBA_F16_SkColorType, esrgb);
+        SINK("srgbnl",  RasterSink, kRGBA_8888_SkColorType, esrgb);
+        SINK("t8888",   ThreadedSink, kN32_SkColorType);
         SINK("pdf",     PDFSink, false, SK_ScalarDefaultRasterDPI);
         SINK("skp",     SKPSink);
         SINK("pipe",    PipeSink);
@@ -928,16 +948,15 @@ static Sink* create_via(const SkString& tag, Sink* wrapped) {
     VIA("gbr",       ViaCSXform,           wrapped, rgb_to_gbr(), true);
     VIA("lite",      ViaLite,              wrapped);
     VIA("pipe",      ViaPipe,              wrapped);
-    VIA("twice",     ViaTwice,             wrapped);
 #ifdef TEST_VIA_SVG
     VIA("svg",       ViaSVG,               wrapped);
 #endif
     VIA("serialize", ViaSerialization,     wrapped);
     VIA("pic",       ViaPicture,           wrapped);
-    VIA("2ndpic",    ViaSecondPicture,     wrapped);
-    VIA("sp",        ViaSingletonPictures, wrapped);
     VIA("tiles",     ViaTiles, 256, 256, nullptr,            wrapped);
     VIA("tiles_rt",  ViaTiles, 256, 256, new SkRTreeFactory, wrapped);
+
+    VIA("ddl",       ViaDDL, 3,            wrapped);
 
     if (FLAGS_matrix.count() == 4) {
         SkMatrix m;
@@ -1300,10 +1319,13 @@ static sk_sp<SkTypeface> create_from_name(const char familyName[], SkFontStyle s
 extern sk_sp<SkTypeface> (*gCreateTypefaceDelegate)(const char [], SkFontStyle );
 
 int main(int argc, char** argv) {
+#if defined(SK_BUILD_FOR_ANDROID_FRAMEWORK) && defined(SK_HAS_HEIF_LIBRARY)
+    android::ProcessState::self()->startThreadPool();
+#endif
     SkCommandLineFlags::Parse(argc, argv);
 
     if (!FLAGS_nativeFonts) {
-        gSkFontMgr_DefaultFactory = &DM::MakeFontMgr;
+        gSkFontMgr_DefaultFactory = &sk_tool_utils::MakePortableFontMgr;
     }
 
 #if defined(SK_BUILD_FOR_WIN)

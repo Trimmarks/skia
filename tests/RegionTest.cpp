@@ -419,3 +419,28 @@ DEF_TEST(region_toobig, reporter) {
     REPORTER_ASSERT(reporter, rgn.isEmpty());
 }
 
+DEF_TEST(region_inverse_union_skbug_7491, reporter) {
+    SkPath path;
+    path.setFillType(SkPath::kInverseWinding_FillType);
+    path.moveTo(10, 20); path.lineTo(10, 30); path.lineTo(10.1f, 10); path.close();
+
+    SkRegion clip;
+    clip.op(SkIRect::MakeLTRB(10, 10, 15, 20), SkRegion::kUnion_Op);
+    clip.op(SkIRect::MakeLTRB(20, 10, 25, 20), SkRegion::kUnion_Op);
+
+    SkRegion rgn;
+    rgn.setPath(path, clip);
+
+    REPORTER_ASSERT(reporter, clip == rgn);
+}
+
+DEF_TEST(giant_path_region, reporter) {
+    const SkScalar big = 32767;
+    SkPath path;
+    path.moveTo(-big, 0);
+    path.quadTo(big, 0, big, big);
+    SkIRect ir = path.getBounds().round();
+    SkRegion rgn;
+    rgn.setPath(path, SkRegion(ir));
+}
+

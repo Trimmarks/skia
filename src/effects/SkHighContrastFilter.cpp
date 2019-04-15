@@ -45,7 +45,7 @@ public:
                         SkArenaAlloc* scratch,
                         bool shaderIsOpaque) const override;
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
 
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkHighContrast_Filter)
 
@@ -143,23 +143,23 @@ void SkHighContrast_Filter::flatten(SkWriteBuffer& buffer) const {
 sk_sp<SkFlattenable> SkHighContrast_Filter::CreateProc(SkReadBuffer& buffer) {
     SkHighContrastConfig config;
     config.fGrayscale = buffer.readBool();
-    config.fInvertStyle = static_cast<InvertStyle>(buffer.readInt());
+    config.fInvertStyle = buffer.read32LE(InvertStyle::kLast);
     config.fContrast = buffer.readScalar();
+
     return SkHighContrastFilter::Make(config);
 }
 
 sk_sp<SkColorFilter> SkHighContrastFilter::Make(
     const SkHighContrastConfig& config) {
-    if (!config.isValid())
+    if (!config.isValid()) {
         return nullptr;
+    }
     return sk_make_sp<SkHighContrast_Filter>(config);
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkHighContrast_Filter::toString(SkString* str) const {
     str->append("SkHighContrastColorFilter ");
 }
-#endif
 
 SK_DEFINE_FLATTENABLE_REGISTRAR_GROUP_START(SkHighContrastFilter)
     SK_DEFINE_FLATTENABLE_REGISTRAR_ENTRY(SkHighContrast_Filter)

@@ -22,6 +22,9 @@ bool GrPixelConfigToVkFormat(GrPixelConfig config, VkFormat* format) {
         case kRGBA_8888_GrPixelConfig:
             *format = VK_FORMAT_R8G8B8A8_UNORM;
             return true;
+        case kRGB_888_GrPixelConfig:
+            // TODO: VK_FORMAT_R8G8B8_UNORM
+            return false;
         case kBGRA_8888_GrPixelConfig:
             *format = VK_FORMAT_B8G8R8A8_UNORM;
             return true;
@@ -31,8 +34,8 @@ bool GrPixelConfigToVkFormat(GrPixelConfig config, VkFormat* format) {
         case kSBGRA_8888_GrPixelConfig:
             *format = VK_FORMAT_B8G8R8A8_SRGB;
             return true;
-        case kRGBA_8888_sint_GrPixelConfig:
-            *format = VK_FORMAT_R8G8B8A8_SINT;
+        case kRGBA_1010102_GrPixelConfig:
+            *format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
             return true;
         case kRGB_565_GrPixelConfig:
             *format = VK_FORMAT_R5G6B5_UNORM_PACK16;
@@ -82,8 +85,8 @@ GrPixelConfig GrVkFormatToPixelConfig(VkFormat format) {
             return kSRGBA_8888_GrPixelConfig;
         case VK_FORMAT_B8G8R8A8_SRGB:
             return kSBGRA_8888_GrPixelConfig;
-        case VK_FORMAT_R8G8B8A8_SINT:
-            return kRGBA_8888_sint_GrPixelConfig;
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+            return kRGBA_1010102_GrPixelConfig;
         case VK_FORMAT_R5G6B5_UNORM_PACK16:
             return kRGB_565_GrPixelConfig;
             break;
@@ -116,8 +119,8 @@ bool GrVkFormatPixelConfigPairIsValid(VkFormat format, GrPixelConfig config) {
             return kSRGBA_8888_GrPixelConfig == config;
         case VK_FORMAT_B8G8R8A8_SRGB:
             return kSBGRA_8888_GrPixelConfig == config;
-        case VK_FORMAT_R8G8B8A8_SINT:
-            return kRGBA_8888_sint_GrPixelConfig == config;
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+            return kRGBA_1010102_GrPixelConfig == config;
         case VK_FORMAT_R5G6B5_UNORM_PACK16:
             return kRGB_565_GrPixelConfig == config;
         case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
@@ -150,6 +153,7 @@ bool GrVkFormatIsSupported(VkFormat format) {
         case VK_FORMAT_R8G8B8A8_SRGB:
         case VK_FORMAT_B8G8R8A8_SRGB:
         case VK_FORMAT_R8G8B8A8_SINT:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         case VK_FORMAT_R5G6B5_UNORM_PACK16:
         case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
         case VK_FORMAT_R8_UNORM:
@@ -263,8 +267,8 @@ bool GrVkFormatIsSRGB(VkFormat format, VkFormat* linearFormat) {
 }
 
 bool GrSampleCountToVkSampleCount(uint32_t samples, VkSampleCountFlagBits* vkSamples) {
+    SkASSERT(samples >= 1);
     switch (samples) {
-        case 0: // fall through
         case 1:
             *vkSamples = VK_SAMPLE_COUNT_1_BIT;
             return true;

@@ -14,6 +14,7 @@
 #include "SkBitmap.h"
 #include "SkBitmapRegionDecoder.h"
 #include "SkCanvas.h"
+#include "SkCommonFlagsConfig.h"
 #include "SkData.h"
 #include "SkMultiPictureDocument.h"
 #include "SkPicture.h"
@@ -250,19 +251,8 @@ private:
     Path fPath;
 };
 
-// DeferredDisplayList flavor
-class DDLSKPSrc : public Src {
-public:
-    explicit DDLSKPSrc(Path path);
 
-    Error draw(SkCanvas*) const override;
-    SkISize size() const override;
-    Name name() const override;
-private:
-    Path fPath;
-};
-
-#if !defined(SK_BUILD_FOR_GOOGLE3)
+#if defined(SK_ENABLE_SKOTTIE)
 class SkottieSrc final : public Src {
 public:
     explicit SkottieSrc(Path path);
@@ -274,11 +264,11 @@ public:
 
 private:
     // Generates a kTileCount x kTileCount filmstrip with evenly distributed frames.
-    static constexpr int               kTileCount = 5;
+    static constexpr int      kTileCount = 5;
 
-    Name                               fName;
-    SkISize                            fTileSize = SkISize::MakeEmpty();
-    std::unique_ptr<skottie::Animation> fAnimation;
+    Name                      fName;
+    SkISize                   fTileSize = SkISize::MakeEmpty();
+    sk_sp<skottie::Animation> fAnimation;
 };
 #endif
 
@@ -335,11 +325,11 @@ public:
     SinkFlags flags() const override { return SinkFlags{ SinkFlags::kNull, SinkFlags::kDirect }; }
 };
 
-
 class GPUSink : public Sink {
 public:
     GPUSink(sk_gpu_test::GrContextFactory::ContextType,
-            sk_gpu_test::GrContextFactory::ContextOverrides, int samples, bool diText,
+            sk_gpu_test::GrContextFactory::ContextOverrides,
+            SkCommandLineConfigGpu::SurfType surfType, int samples, bool diText,
             SkColorType colorType, SkAlphaType alphaType, sk_sp<SkColorSpace> colorSpace,
             bool threaded, const GrContextOptions& grCtxOptions);
 
@@ -347,10 +337,16 @@ public:
     Error onDraw(const Src&, SkBitmap*, SkWStream*, SkString*,
                  const GrContextOptions& baseOptions) const;
 
+    sk_gpu_test::GrContextFactory::ContextType contextType() const { return fContextType; }
+    const sk_gpu_test::GrContextFactory::ContextOverrides& contextOverrides() {
+        return fContextOverrides;
+    }
+    SkCommandLineConfigGpu::SurfType surfType() const { return fSurfType; }
+    bool useDIText() const { return fUseDIText; }
     bool serial() const override { return !fThreaded; }
     const char* fileExtension() const override { return "png"; }
     SinkFlags flags() const override {
-        SinkFlags::Multisampled ms = fSampleCount > 0 ? SinkFlags::kMultisampled
+        SinkFlags::Multisampled ms = fSampleCount > 1 ? SinkFlags::kMultisampled
                                                       : SinkFlags::kNotMultisampled;
         return SinkFlags{ SinkFlags::kGPU, SinkFlags::kDirect, ms };
     }
@@ -359,6 +355,7 @@ public:
 private:
     sk_gpu_test::GrContextFactory::ContextType        fContextType;
     sk_gpu_test::GrContextFactory::ContextOverrides   fContextOverrides;
+    SkCommandLineConfigGpu::SurfType                  fSurfType;
     int                                               fSampleCount;
     bool                                              fUseDIText;
     SkColorType                                       fColorType;
@@ -371,7 +368,8 @@ private:
 class GPUThreadTestingSink : public GPUSink {
 public:
     GPUThreadTestingSink(sk_gpu_test::GrContextFactory::ContextType,
-                         sk_gpu_test::GrContextFactory::ContextOverrides, int samples, bool diText,
+                         sk_gpu_test::GrContextFactory::ContextOverrides,
+                         SkCommandLineConfigGpu::SurfType surfType, int samples, bool diText,
                          SkColorType colorType, SkAlphaType alphaType,
                          sk_sp<SkColorSpace> colorSpace, bool threaded,
                          const GrContextOptions& grCtxOptions);
@@ -424,9 +422,17 @@ public:
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
     const char* fileExtension() const override { return "png"; }
     SinkFlags flags() const override { return SinkFlags{ SinkFlags::kRaster, SinkFlags::kDirect }; }
-private:
+protected:
+    void allocPixels(const Src& src, SkBitmap*) const;
+
     SkColorType         fColorType;
     sk_sp<SkColorSpace> fColorSpace;
+};
+
+class ThreadedSink : public RasterSink {
+public:
+    explicit ThreadedSink(SkColorType, sk_sp<SkColorSpace> = nullptr);
+    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
 };
 
 class SKPSink : public Sink {
@@ -447,11 +453,14 @@ public:
 
 class SVGSink : public Sink {
 public:
-    SVGSink();
+    SVGSink(int pageIndex = 0);
 
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
     const char* fileExtension() const override { return "svg"; }
     SinkFlags flags() const override { return SinkFlags{ SinkFlags::kVector, SinkFlags::kDirect }; }
+
+private:
+    int fPageIndex;
 };
 
 
@@ -514,33 +523,22 @@ private:
     std::unique_ptr<SkBBHFactory> fFactory;
 };
 
-class ViaSecondPicture : public Via {
+class ViaDDL : public Via {
 public:
-    explicit ViaSecondPicture(Sink* sink) : Via(sink) {}
+    ViaDDL(int numDivisions, Sink* sink);
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
-};
+private:
+#if SK_SUPPORT_GPU
+    class PromiseImageHelper;
+    class TileData;
 
-class ViaSingletonPictures : public Via {
-public:
-    explicit ViaSingletonPictures(Sink* sink) : Via(sink) {}
-    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
-};
-
-class ViaTwice : public Via {
-public:
-    explicit ViaTwice(Sink* sink) : Via(sink) {}
-    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
+    const int fNumDivisions;
+#endif
 };
 
 class ViaSVG : public Via {
 public:
     explicit ViaSVG(Sink* sink) : Via(sink) {}
-    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
-};
-
-class ViaMojo : public Via {
-public:
-    explicit ViaMojo(Sink* sink) : Via(sink) {}
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
 };
 

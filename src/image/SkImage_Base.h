@@ -35,6 +35,7 @@ public:
     // Implementors: if you can not return the value, return an invalid ImageInfo with w=0 & h=0
     // & unknown color space.
     virtual SkImageInfo onImageInfo() const = 0;
+    virtual SkColorType onColorType() const = 0;
     virtual SkAlphaType onAlphaType() const = 0;
 
     virtual bool onPeekPixels(SkPixmap*) const { return false; }
@@ -54,12 +55,12 @@ public:
     virtual sk_sp<GrTextureProxy> refPinnedTextureProxy(uint32_t* uniqueID) const {
         return nullptr;
     }
-    virtual GrBackendObject onGetTextureHandle(bool flushPendingGrContextIO,
-                                               GrSurfaceOrigin* origin) const {
-        return 0;
-    }
+
     virtual GrTexture* onGetTexture() const { return nullptr; }
 #endif
+    virtual GrBackendTexture onGetBackendTexture(bool flushPendingGrContextIO,
+                                                 GrSurfaceOrigin* origin) const;
+
     virtual SkImageCacherator* peekCacherator() const { return nullptr; }
 
     // return a read-only copy of the pixels. We promise to not modify them,
@@ -69,9 +70,9 @@ public:
 
     virtual sk_sp<SkImage> onMakeSubset(const SkIRect&) const = 0;
 
-    virtual SkData* onRefEncoded() const { return nullptr; }
+    virtual sk_sp<SkData> onRefEncoded() const { return nullptr; }
 
-    virtual bool onAsLegacyBitmap(SkBitmap*, LegacyBitmapMode) const;
+    virtual bool onAsLegacyBitmap(SkBitmap*) const;
 
     // True for picture-backed and codec-backed
     virtual bool onIsLazyGenerated() const { return false; }

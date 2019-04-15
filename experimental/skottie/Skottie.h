@@ -11,8 +11,6 @@
 #include "SkRefCnt.h"
 #include "SkSize.h"
 #include "SkString.h"
-#include "SkTArray.h"
-#include "SkTHash.h"
 #include "SkTypes.h"
 
 #include <memory>
@@ -21,28 +19,34 @@ class SkCanvas;
 struct SkRect;
 class SkStream;
 
-namespace Json { class Value; }
-
-namespace sksg { class RenderNode;  }
+namespace sksg { class Scene;  }
 
 namespace skottie {
 
-class AnimatorBase;
+namespace json { class ValueRef; }
 
-class ResourceProvider : public SkNoncopyable {
+class SK_API ResourceProvider : public SkNoncopyable {
 public:
     virtual ~ResourceProvider() = default;
 
     virtual std::unique_ptr<SkStream> openStream(const char resource[]) const = 0;
 };
 
-class Animation : public SkNoncopyable {
+class SK_API Animation : public SkRefCnt {
 public:
-    static std::unique_ptr<Animation> Make(SkStream*, const ResourceProvider&);
-    static std::unique_ptr<Animation> MakeFromFile(const char path[],
-                                                   const ResourceProvider* = nullptr);
+    struct Stats {
+        float  fTotalLoadTimeMS,
+               fJsonParseTimeMS,
+               fSceneParseTimeMS;
+        size_t fJsonSize,
+               fAnimatorCount;
+    };
 
-    ~Animation();
+    static sk_sp<Animation> Make(SkStream*, const ResourceProvider&, Stats* = nullptr);
+    static sk_sp<Animation> MakeFromFile(const char path[], const ResourceProvider* = nullptr,
+                                         Stats* = nullptr);
+
+    ~Animation() override;
 
     void render(SkCanvas*, const SkRect* dst = nullptr) const;
 
@@ -54,25 +58,21 @@ public:
          SkScalar   inPoint() const { return fInPoint;   }
          SkScalar  outPoint() const { return fOutPoint;  }
 
-    void setShowInval(bool show) { fShowInval = show; }
+    void setShowInval(bool show);
 
 private:
-    Animation(const ResourceProvider&,
-              SkString ver, const SkSize& size, SkScalar fps,
-              const Json::Value&);
+    Animation(const ResourceProvider&, SkString ver, const SkSize& size, SkScalar fps,
+              const json::ValueRef&, Stats*);
 
-    SkString                                fVersion;
-    SkSize                                  fSize;
-    SkScalar                                fFrameRate,
-                                            fInPoint,
-                                            fOutPoint;
+    SkString                     fVersion;
+    SkSize                       fSize;
+    SkScalar                     fFrameRate,
+                                 fInPoint,
+                                 fOutPoint;
 
-    sk_sp<sksg::RenderNode>                 fDom;
-    SkTArray<std::unique_ptr<AnimatorBase>> fAnimators;
+    std::unique_ptr<sksg::Scene> fScene;
 
-    bool                    fShowInval = false;
-
-    typedef SkNoncopyable INHERITED;
+    typedef SkRefCnt INHERITED;
 };
 
 } // namespace skottie

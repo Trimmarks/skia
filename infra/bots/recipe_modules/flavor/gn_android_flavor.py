@@ -15,18 +15,24 @@ class GNAndroidFlavorUtils(default_flavor.DefaultFlavorUtils):
     super(GNAndroidFlavorUtils, self).__init__(m)
     self._ever_ran_adb = False
     self.ADB_BINARY = '/usr/bin/adb.1.0.35'
+    self.ADB_PUB_KEY = '/home/chrome-bot/.android/adbkey'
     self._golo_devices = ['Nexus5x']
     if self.m.vars.builder_cfg.get('model') in self._golo_devices:
       self.ADB_BINARY = '/opt/infra-android/tools/adb'
+      self.ADB_PUB_KEY = ('/home/chrome-bot/.android/'
+                          'chrome_infrastructure_adbkey')
 
+    # Data should go in android_data_dir, which may be preserved across runs.
+    android_data_dir = '/sdcard/revenge_of_the_skiabot/'
     self.device_dirs = default_flavor.DeviceDirs(
-        dm_dir        = self.m.vars.android_data_dir + 'dm_out',
-        perf_data_dir = self.m.vars.android_data_dir + 'perf',
-        resource_dir  = self.m.vars.android_data_dir + 'resources',
-        images_dir    = self.m.vars.android_data_dir + 'images',
-        skp_dir       = self.m.vars.android_data_dir + 'skps',
-        svg_dir       = self.m.vars.android_data_dir + 'svgs',
-        tmp_dir       = self.m.vars.android_data_dir)
+        bin_dir       = '/data/local/tmp/',
+        dm_dir        = android_data_dir + 'dm_out',
+        perf_data_dir = android_data_dir + 'perf',
+        resource_dir  = android_data_dir + 'resources',
+        images_dir    = android_data_dir + 'images',
+        skp_dir       = android_data_dir + 'skps',
+        svg_dir       = android_data_dir + 'svgs',
+        tmp_dir       = android_data_dir)
 
     # A list of devices we can't root.  If rooting fails and a device is not
     # on the list, we fail the task to avoid perf inconsistencies.
@@ -68,13 +74,8 @@ class GNAndroidFlavorUtils(default_flavor.DefaultFlavorUtils):
     }
 
   def _run(self, title, *cmd, **kwargs):
-    with self.m.context(cwd=self.m.vars.skia_dir):
+    with self.m.context(cwd=self.m.path['start_dir'].join('skia')):
       return self.m.run(self.m.step, title, cmd=list(cmd), **kwargs)
-
-  def _py(self, title, script, infra_step=True):
-    with self.m.context(cwd=self.m.vars.skia_dir):
-      return self.m.run(self.m.python, title, script=script,
-                        infra_step=infra_step)
 
   def _adb(self, title, *cmd, **kwargs):
     # The only non-infra adb steps (dm / nanobench) happen to not use _adb().
@@ -101,11 +102,12 @@ class GNAndroidFlavorUtils(default_flavor.DefaultFlavorUtils):
                  timeout=180, abort_on_failure=False,
                  fail_build_on_failure=False)
 
-    with self.m.context(cwd=self.m.vars.skia_dir):
-      return self.m.run.with_retry(self.m.step, title, attempts,
-                                   cmd=[self.ADB_BINARY]+list(cmd),
-                                   between_attempts_fn=wait_for_device,
-                                   **kwargs)
+    with self.m.context(cwd=self.m.path['start_dir'].join('skia')):
+      with self.m.env({'ADB_VENDOR_KEYS': self.ADB_PUB_KEY}):
+        return self.m.run.with_retry(self.m.step, title, attempts,
+                                     cmd=[self.ADB_BINARY]+list(cmd),
+                                     between_attempts_fn=wait_for_device,
+                                     **kwargs)
 
   def _scale_for_dm(self):
     device = self.m.vars.builder_cfg.get('model')
@@ -343,69 +345,14 @@ if actual_freq != str(freq):
         infra_step=True,
         timeout=30)
 
-  def compile(self, unused_target):
-    compiler      = self.m.vars.builder_cfg.get('compiler')
-    configuration = self.m.vars.builder_cfg.get('configuration')
-    extra_tokens  = self.m.vars.extra_tokens
-    os            = self.m.vars.builder_cfg.get('os')
-    target_arch   = self.m.vars.builder_cfg.get('target_arch')
-
-    assert compiler == 'Clang'  # At this rate we might not ever support GCC.
-
-    extra_cflags = []
-    if configuration == 'Debug':
-      extra_cflags.append('-O1')
-
-    ndk_asset = 'android_ndk_linux'
-    if 'Mac' in os:
-      ndk_asset = 'android_ndk_darwin'
-    elif 'Win' in os:
-      ndk_asset = 'n'
-
-    quote = lambda x: '"%s"' % x
-    args = {
-        'ndk': quote(self.m.vars.slave_dir.join(ndk_asset)),
-        'target_cpu': quote(target_arch),
-    }
-
-    if configuration != 'Debug':
-      args['is_debug'] = 'false'
-    if 'Vulkan' in extra_tokens:
-      args['ndk_api'] = 24
-      args['skia_enable_vulkan_debug_layers'] = 'false'
-    if 'ASAN' in extra_tokens:
-      # Note: if one day we do ASAN on 32 bit arm, we need to
-      # make sure we use at least SDK 21
-      # args['ndk_api'] = 21
-      args['sanitize'] = '"ASAN"'
-
-    # If an Android API level is specified, use that.
-    for t in extra_tokens:
-      m = re.search(r'API(\d+)', t)
-      if m and len(m.groups()) == 1:
-        args['ndk_api'] = m.groups()[0]
-        break
-
-    if extra_cflags:
-      args['extra_cflags'] = repr(extra_cflags).replace("'", '"')
-
-    gn_args = ' '.join('%s=%s' % (k,v) for (k,v) in sorted(args.iteritems()))
-
-    gn    = 'gn.exe'    if 'Win' in os else 'gn'
-    ninja = 'ninja.exe' if 'Win' in os else 'ninja'
-    gn = self.m.vars.skia_dir.join('bin', gn)
-
-    self._py('fetch-gn', self.m.vars.skia_dir.join('bin', 'fetch-gn'))
-    self._run('gn gen', gn, 'gen', self.out_dir, '--args=' + gn_args)
-    self._run('ninja', ninja, '-k', '0', '-C', self.out_dir)
-
   def install(self):
     self._adb('mkdir ' + self.device_dirs.resource_dir,
               'shell', 'mkdir', '-p', self.device_dirs.resource_dir)
     if 'ASAN' in self.m.vars.extra_tokens:
       asan_setup = self.m.vars.slave_dir.join(
             'android_ndk_linux', 'toolchains', 'llvm', 'prebuilt',
-            'linux-x86_64', 'bin', 'asan_device_setup')
+            'linux-x86_64', 'lib64', 'clang', '6.0.2', 'bin',
+            'asan_device_setup')
       self.m.run(self.m.python.inline, 'Setting up device to run ASAN',
         program="""
 import os
@@ -442,22 +389,38 @@ if 'already disabled' not in output:
   subprocess.check_output([ADB, 'reboot'])
   wait_for_device()
 
-# ASAN setup script is idempotent, either it installs it or says it's installed
-output = subprocess.check_output([ADB, 'wait-for-device'])
-process = subprocess.Popen([ASAN_SETUP], env={'ADB': ADB},
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def installASAN(revert=False):
+  # ASAN setup script is idempotent, either it installs it or
+  # says it's installed.  Returns True on success, false otherwise.
+  out = subprocess.check_output([ADB, 'wait-for-device'])
+  print out
+  cmd = [ASAN_SETUP]
+  if revert:
+    cmd = [ASAN_SETUP, '--revert']
+  process = subprocess.Popen(cmd, env={'ADB': ADB},
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# this also blocks until command finishes
-(stdout, stderr) = process.communicate()
-print stdout
-print 'Stderr: %s' % stderr
-if process.returncode:
-  raise Exception('setup ASAN returned with non-zero exit code: %d' %
-                  process.returncode)
+  # this also blocks until command finishes
+  (stdout, stderr) = process.communicate()
+  print stdout
+  print 'Stderr: %s' % stderr
+  return process.returncode == 0
 
-if 'Please wait until the device restarts' in stdout:
+if not installASAN():
+  print 'Trying to revert the ASAN install and then re-install'
+  # ASAN script sometimes has issues if it was interrupted or partially applied
+  # Try reverting it, then re-enabling it
+  if not installASAN(revert=True):
+    raise Exception('reverting ASAN install failed')
+
   # Sleep because device does not reboot instantly
-  time.sleep(30)
+  time.sleep(10)
+
+  if not installASAN():
+    raise Exception('Tried twice to setup ASAN and failed.')
+
+# Sleep because device does not reboot instantly
+time.sleep(10)
 wait_for_device()
 """,
         args = [self.ADB_BINARY, asan_setup],
@@ -483,7 +446,7 @@ wait_for_device()
                 line = line.replace(addr, addr + ' ' + sym.strip())
             print line
           """ % self.ADB_BINARY,
-          args=[self.m.vars.skia_out.join(self.m.vars.configuration)],
+          args=[self.m.vars.skia_out],
           infra_step=True,
           timeout=300,
           abort_on_failure=False)
@@ -496,8 +459,10 @@ wait_for_device()
     # broken state; it was just rebooting.
     if (self.m.run.failed_steps and
         isinstance(self.m.run.failed_steps[0], recipe_api.InfraFailure)):
+      bot_id = self.m.vars.swarming_bot_id
       self.m.file.write_text('Quarantining Bot',
-                             '/home/chrome-bot/force_quarantine', ' ')
+                             '/home/chrome-bot/%s.force_quarantine' % bot_id,
+                             ' ')
 
     if self._ever_ran_adb:
       self._adb('kill adb server', 'kill-server')
@@ -507,17 +472,17 @@ wait_for_device()
       self._scale_for_nanobench()
     else:
       self._scale_for_dm()
-    app = self.m.vars.skia_out.join(self.m.vars.configuration, cmd[0])
+    app = self.m.vars.skia_out.join(cmd[0])
     self._adb('push %s' % cmd[0],
-              'push', app, self.m.vars.android_bin_dir)
+              'push', app, self.device_dirs.bin_dir)
 
     sh = '%s.sh' % cmd[0]
     self.m.run.writefile(self.m.vars.tmp_dir.join(sh),
-        'set -x; %s%s; echo $? >%src' %
-        (self.m.vars.android_bin_dir, subprocess.list2cmdline(map(str, cmd)),
-            self.m.vars.android_bin_dir))
+        'set -x; %s%s; echo $? >%src' % (
+            self.device_dirs.bin_dir, subprocess.list2cmdline(map(str, cmd)),
+            self.device_dirs.bin_dir))
     self._adb('push %s' % sh,
-              'push', self.m.vars.tmp_dir.join(sh), self.m.vars.android_bin_dir)
+              'push', self.m.vars.tmp_dir.join(sh), self.device_dirs.bin_dir)
 
     self._adb('clear log', 'logcat', '-c')
     self.m.python.inline('%s' % cmd[0], """
@@ -533,7 +498,7 @@ wait_for_device()
       print "Couldn't read the return code.  Probably killed for OOM."
       sys.exit(1)
     """ % (self.ADB_BINARY, self.ADB_BINARY),
-      args=[self.m.vars.android_bin_dir, sh])
+      args=[self.device_dirs.bin_dir, sh])
 
   def copy_file_to_device(self, host, device):
     self._adb('push %s %s' % (host, device), 'push', host, device)

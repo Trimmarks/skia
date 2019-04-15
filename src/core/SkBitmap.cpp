@@ -16,6 +16,7 @@
 #include "SkImageInfoPriv.h"
 #include "SkMallocPixelRef.h"
 #include "SkMask.h"
+#include "SkMaskFilterBase.h"
 #include "SkMath.h"
 #include "SkPixelRef.h"
 #include "SkPixmapPriv.h"
@@ -383,8 +384,11 @@ void* SkBitmap::getAddr(int x, int y) const {
             case kRGBA_F16_SkColorType:
                 base += x << 3;
                 break;
+            case kRGB_888x_SkColorType:
             case kRGBA_8888_SkColorType:
             case kBGRA_8888_SkColorType:
+            case kRGB_101010x_SkColorType:
+            case kRGBA_1010102_SkColorType:
                 base += x << 2;
                 break;
             case kARGB_4444_SkColorType:
@@ -499,6 +503,7 @@ bool SkBitmap::writePixels(const SkPixmap& src, int dstX, int dstY,
     const SkImageInfo dstInfo = this->info().makeWH(rec.fInfo.width(), rec.fInfo.height());
     SkConvertPixels(dstInfo, dstPixels, this->rowBytes(), rec.fInfo, rec.fPixels, rec.fRowBytes,
                     nullptr, behavior);
+    this->notifyPixelsChanged();
     return true;
 }
 
@@ -543,7 +548,7 @@ bool SkBitmap::extractAlpha(SkBitmap* dst, const SkPaint* paint,
     // compute our (larger?) dst bounds if we have a filter
     if (filter) {
         identity.reset();
-        if (!filter->filterMask(&dstM, srcM, identity, nullptr)) {
+        if (!as_MFB(filter)->filterMask(&dstM, srcM, identity, nullptr)) {
             goto NO_FILTER_CASE;
         }
         dstM.fRowBytes = SkAlign4(dstM.fBounds.width());
@@ -567,7 +572,7 @@ bool SkBitmap::extractAlpha(SkBitmap* dst, const SkPaint* paint,
     SkAutoMaskFreeImage srcCleanup(srcM.fImage);
 
     GetBitmapAlpha(*this, srcM.fImage, srcM.fRowBytes);
-    if (!filter->filterMask(&dstM, srcM, identity, nullptr)) {
+    if (!as_MFB(filter)->filterMask(&dstM, srcM, identity, nullptr)) {
         goto NO_FILTER_CASE;
     }
     SkAutoMaskFreeImage dstCleanup(dstM.fImage);
@@ -628,7 +633,6 @@ void SkBitmap::validate() const {
 }
 #endif
 
-#ifndef SK_IGNORE_TO_STRING
 #include "SkString.h"
 void SkBitmap::toString(SkString* str) const {
 
@@ -655,7 +659,6 @@ void SkBitmap::toString(SkString* str) const {
     str->appendf(" pixelref:%p", this->pixelRef());
     str->append(")");
 }
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 

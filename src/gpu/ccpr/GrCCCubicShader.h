@@ -19,41 +19,28 @@
  *
  * The provided curve segments must be convex, monotonic with respect to the vector of their closing
  * edge [P3 - P0], and must not contain or be near any inflection points or loop intersections.
- * (Use GrCCGeometry.)
+ * (Use GrCCGeometry::cubicTo().)
  */
 class GrCCCubicShader : public GrCCCoverageProcessor::Shader {
-protected:
-    void emitSetupCode(GrGLSLVertexGeoBuilder*, const char* pts, const char* repetitionID,
-                       const char* wind, GeometryVars*) const final;
+public:
+    void emitSetupCode(GrGLSLVertexGeoBuilder*, const char* pts, const char* wind,
+                       const char** outHull4) const override;
 
-    virtual void onEmitSetupCode(GrGLSLVertexGeoBuilder*, const char* pts, const char* repetitionID,
-                                 GeometryVars*) const {}
+    void onEmitVaryings(GrGLSLVaryingHandler*, GrGLSLVarying::Scope, SkString* code,
+                        const char* position, const char* coverage,
+                        const char* cornerCoverage) override;
 
-    WindHandling onEmitVaryings(GrGLSLVaryingHandler*, GrGLSLVarying::Scope, SkString* code,
-                                const char* position, const char* coverage, const char* wind) final;
+    void onEmitFragmentCode(GrGLSLFPFragmentBuilder*, const char* outputCoverage) const override;
 
-    virtual void onEmitVaryings(GrGLSLVaryingHandler*, GrGLSLVarying::Scope, SkString* code) = 0;
+private:
+    void calcHullCoverage(SkString* code, const char* klmAndEdge, const char* gradMatrix,
+                          const char* outputCoverage) const;
 
-    GrShaderVar fKLMMatrix{"klm_matrix", kFloat3x3_GrSLType};
-    GrShaderVar fEdgeDistanceEquation{"edge_distance_equation", kFloat3_GrSLType};
-    GrGLSLVarying fKLMD;
-};
-
-class GrCCCubicHullShader : public GrCCCubicShader {
-    void onEmitVaryings(GrGLSLVaryingHandler*, GrGLSLVarying::Scope, SkString* code) override;
-    void onEmitFragmentCode(GrGLSLPPFragmentBuilder*, const char* outputCoverage) const override;
-
+    const GrShaderVar fKLMMatrix{"klm_matrix", kFloat3x3_GrSLType};
+    const GrShaderVar fEdgeDistanceEquation{"edge_distance_equation", kFloat3_GrSLType};
+    GrGLSLVarying fKLM_fEdge;
     GrGLSLVarying fGradMatrix;
-};
-
-class GrCCCubicCornerShader : public GrCCCubicShader {
-    void onEmitSetupCode(GrGLSLVertexGeoBuilder*, const char* pts, const char* repetitionID,
-                         GeometryVars*) const override;
-    void onEmitVaryings(GrGLSLVaryingHandler*, GrGLSLVarying::Scope, SkString* code) override;
-    void onEmitFragmentCode(GrGLSLPPFragmentBuilder*, const char* outputCoverage) const override;
-
-    GrGLSLVarying fdKLMDdx;
-    GrGLSLVarying fdKLMDdy;
+    GrGLSLVarying fCornerCoverage;
 };
 
 #endif

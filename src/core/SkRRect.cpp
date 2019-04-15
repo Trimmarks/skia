@@ -6,9 +6,10 @@
  */
 
 #include <cmath>
-#include "SkRRect.h"
+#include "SkRRectPriv.h"
 #include "SkScopeExit.h"
 #include "SkBuffer.h"
+#include "SkMalloc.h"
 #include "SkMatrix.h"
 #include "SkScaleToSides.h"
 
@@ -115,6 +116,26 @@ static double compute_min_scale(double rad1, double rad2, double limit, double c
     return curMin;
 }
 
+static bool clamp_to_zero(SkVector radii[4]) {
+    bool allCornersSquare = true;
+
+    // Clamp negative radii to zero
+    for (int i = 0; i < 4; ++i) {
+        if (radii[i].fX <= 0 || radii[i].fY <= 0) {
+            // In this case we are being a little fast & loose. Since one of
+            // the radii is 0 the corner is square. However, the other radii
+            // could still be non-zero and play in the global scale factor
+            // computation.
+            radii[i].fX = 0;
+            radii[i].fY = 0;
+        } else {
+            allCornersSquare = false;
+        }
+    }
+
+    return allCornersSquare;
+}
+
 void SkRRect::setRectRadii(const SkRect& rect, const SkVector radii[4]) {
     if (!this->initializeRect(rect)) {
         return;
@@ -127,28 +148,12 @@ void SkRRect::setRectRadii(const SkRect& rect, const SkVector radii[4]) {
 
     memcpy(fRadii, radii, sizeof(fRadii));
 
-    bool allCornersSquare = true;
-
-    // Clamp negative radii to zero
-    for (int i = 0; i < 4; ++i) {
-        if (fRadii[i].fX <= 0 || fRadii[i].fY <= 0) {
-            // In this case we are being a little fast & loose. Since one of
-            // the radii is 0 the corner is square. However, the other radii
-            // could still be non-zero and play in the global scale factor
-            // computation.
-            fRadii[i].fX = 0;
-            fRadii[i].fY = 0;
-        } else {
-            allCornersSquare = false;
-        }
-    }
-
-    if (allCornersSquare) {
+    if (clamp_to_zero(fRadii)) {
         this->setRect(rect);
         return;
     }
 
-    this->scaleRadii();
+    this->scaleRadii(rect);
 }
 
 bool SkRRect::initializeRect(const SkRect& rect) {
@@ -166,7 +171,7 @@ bool SkRRect::initializeRect(const SkRect& rect) {
     return true;
 }
 
-void SkRRect::scaleRadii() {
+void SkRRect::scaleRadii(const SkRect& rect) {
 
     // Proportionally scale down all radii to fit. Find the minimum ratio
     // of a side and the radii on that side (for all four sides) and use
@@ -193,6 +198,12 @@ void SkRRect::scaleRadii() {
         SkScaleToSides::AdjustRadii(height, scale, &fRadii[1].fY, &fRadii[2].fY);
         SkScaleToSides::AdjustRadii(width,  scale, &fRadii[2].fX, &fRadii[3].fX);
         SkScaleToSides::AdjustRadii(height, scale, &fRadii[3].fY, &fRadii[0].fY);
+    }
+
+    // adjust radii may set x or y to zero; set companion to zero as well
+    if (clamp_to_zero(fRadii)) {
+        this->setRect(rect);
+        return;
     }
 
     // At this point we're either oval, simple, or complex (not empty or rect).
@@ -256,11 +267,11 @@ bool SkRRect::checkCornerContainment(SkScalar x, SkScalar y) const {
     return dist <= SkScalarSquare(fRadii[index].fX * fRadii[index].fY);
 }
 
-bool SkRRect::allCornersCircular(SkScalar tolerance) const {
-    return SkScalarNearlyEqual(fRadii[0].fX, fRadii[0].fY, tolerance) &&
-           SkScalarNearlyEqual(fRadii[1].fX, fRadii[1].fY, tolerance) &&
-           SkScalarNearlyEqual(fRadii[2].fX, fRadii[2].fY, tolerance) &&
-           SkScalarNearlyEqual(fRadii[3].fX, fRadii[3].fY, tolerance);
+bool SkRRectPriv::AllCornersCircular(const SkRRect& rr, SkScalar tolerance) {
+    return SkScalarNearlyEqual(rr.fRadii[0].fX, rr.fRadii[0].fY, tolerance) &&
+           SkScalarNearlyEqual(rr.fRadii[1].fX, rr.fRadii[1].fY, tolerance) &&
+           SkScalarNearlyEqual(rr.fRadii[2].fX, rr.fRadii[2].fY, tolerance) &&
+           SkScalarNearlyEqual(rr.fRadii[3].fX, rr.fRadii[3].fY, tolerance);
 }
 
 bool SkRRect::contains(const SkRect& rect) const {
@@ -387,6 +398,10 @@ bool SkRRect::transform(const SkMatrix& matrix, SkRRect* dst) const {
     // remains unchanged.
     dst->fType = fType;
 
+    if (kRect_Type == fType) {
+        SkASSERT(dst->isValid());
+        return true;
+    }
     if (kOval_Type == fType) {
         for (int i = 0; i < 4; ++i) {
             dst->fRadii[i].fX = SkScalarHalf(newRect.width());
@@ -435,7 +450,7 @@ bool SkRRect::transform(const SkMatrix& matrix, SkRRect* dst) const {
         return false;
     }
 
-    dst->scaleRadii();
+    dst->scaleRadii(dst->fRect);
     dst->isValid();
 
     return true;
@@ -495,16 +510,10 @@ size_t SkRRect::readFromMemory(const void* buffer, size_t length) {
     if (length < kSizeInMemory) {
         return 0;
     }
-    // Note that the buffer may be smaller than SkRRect. It is important not to access
-    // bufferAsRRect->fType.
-    const SkRRect* bufferAsRRect = reinterpret_cast<const SkRRect*>(buffer);
-    if (!AreRectAndRadiiValid(bufferAsRRect->fRect, bufferAsRRect->fRadii)) {
-        return 0;
-    }
-    // Deserialize rect and corners, then rederive the type tag.
-    memcpy(this, buffer, kSizeInMemory);
-    this->computeType();
 
+    SkRRect raw;
+    memcpy(&raw, buffer, kSizeInMemory);
+    this->setRectRadii(raw.fRect, raw.fRadii);
     return kSizeInMemory;
 }
 
@@ -512,14 +521,9 @@ bool SkRRect::readFromBuffer(SkRBuffer* buffer) {
     if (buffer->available() < kSizeInMemory) {
         return false;
     }
-    SkRRect readData;
-    buffer->read(&readData, kSizeInMemory);
-    if (!AreRectAndRadiiValid(readData.fRect, readData.fRadii)) {
-        return false;
-    }
-    memcpy(this, &readData, kSizeInMemory);
-    this->computeType();
-    return true;
+    SkRRect storage;
+    return buffer->read(&storage, kSizeInMemory) &&
+           (this->readFromMemory(&storage, kSizeInMemory) == kSizeInMemory);
 }
 
 #include "SkString.h"

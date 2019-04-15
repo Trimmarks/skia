@@ -7,6 +7,7 @@
 
 #include "Sk4fLinearGradient.h"
 #include "Sk4x4f.h"
+#include "SkPaint.h"
 
 #include <cmath>
 
@@ -55,7 +56,7 @@ SkScalar pinFx<SkShader::kClamp_TileMode>(SkScalar fx) {
 
 template<>
 SkScalar pinFx<SkShader::kRepeat_TileMode>(SkScalar fx) {
-    SkScalar f = SkScalarFraction(fx);
+    SkScalar f = SkScalarIsFinite(fx) ? SkScalarFraction(fx) : 0;
     if (f < 0) {
         f = SkTMin(f + 1, nextafterf(1, 0));
     }
@@ -66,7 +67,7 @@ SkScalar pinFx<SkShader::kRepeat_TileMode>(SkScalar fx) {
 
 template<>
 SkScalar pinFx<SkShader::kMirror_TileMode>(SkScalar fx) {
-    SkScalar f = SkScalarMod(fx, 2.0f);
+    SkScalar f = SkScalarIsFinite(fx) ? SkScalarMod(fx, 2.0f) : 0;
     if (f < 0) {
         f = SkTMin(f + 2, nextafterf(2, 0));
     }
@@ -201,6 +202,9 @@ LinearGradient4fContext::shadePremulSpan(int x, int y, dstType dst[], int count,
                                          float bias0, float bias1) const {
     const SkLinearGradient& shader = static_cast<const SkLinearGradient&>(fShader);
     switch (shader.fTileMode) {
+    case kDecal_TileMode:
+        SkASSERT(false);    // decal only supported via stages
+        // fall-through
     case kClamp_TileMode:
         this->shadeSpanInternal<dstType, premul, kClamp_TileMode >(x, y, dst, count, bias0, bias1);
         break;

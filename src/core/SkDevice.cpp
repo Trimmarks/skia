@@ -14,6 +14,7 @@
 #include "SkImagePriv.h"
 #include "SkImage_Base.h"
 #include "SkLatticeIter.h"
+#include "SkLocalMatrixShader.h"
 #include "SkMatrixPriv.h"
 #include "SkPatchUtils.h"
 #include "SkPathMeasure.h"
@@ -154,8 +155,6 @@ void SkBaseDevice::drawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
             runPaint = paint;
             continue;
         }
-
-        runPaint.setFlags(this->filterTextFlags(runPaint));
 
         switch (it.positioning()) {
         case SkTextBlob::kDefault_Positioning:
@@ -403,6 +402,10 @@ static void morphpath(SkPath* dst, const SkPath& src, SkPathMeasure& meas,
                 morphpoints(dstP, &srcP[1], 2, meas, matrix);
                 dst->quadTo(dstP[0], dstP[1]);
                 break;
+            case SkPath::kConic_Verb:
+                morphpoints(dstP, &srcP[1], 2, meas, matrix);
+                dst->conicTo(dstP[0], dstP[1], iter.conicWeight());
+                break;
             case SkPath::kCubic_Verb:
                 morphpoints(dstP, &srcP[1], 3, meas, matrix);
                 dst->cubicTo(dstP[0], dstP[1], dstP[2]);
@@ -491,6 +494,9 @@ void SkBaseDevice::drawTextRSXform(const void* text, size_t len,
             break;
     }
 
+    SkPaint localPaint(paint);
+    SkShader* shader = paint.getShader();
+
     SkMatrix localM, currM;
     const void* stopText = (const char*)text + len;
     while ((const char*)text < (const char*)stopText) {
@@ -498,30 +504,25 @@ void SkBaseDevice::drawTextRSXform(const void* text, size_t len,
         currM.setConcat(this->ctm(), localM);
         SkAutoDeviceCTMRestore adc(this, currM);
 
+        // We want to rotate each glyph by the rsxform, but we don't want to rotate "space"
+        // (i.e. the shader that cares about the ctm) so we have to undo our little ctm trick
+        // with a localmatrixshader so that the shader draws as if there was no change to the ctm.
+        if (shader) {
+            SkMatrix inverse;
+            if (localM.invert(&inverse)) {
+                localPaint.setShader(shader->makeWithLocalMatrix(inverse));
+            } else {
+                localPaint.setShader(nullptr);  // can't handle this xform
+            }
+        }
+
         int subLen = proc((const char*)text);
-        this->drawText(text, subLen, 0, 0, paint);
+        this->drawText(text, subLen, 0, 0, localPaint);
         text = (const char*)text + subLen;
     }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
-
-uint32_t SkBaseDevice::filterTextFlags(const SkPaint& paint) const {
-    uint32_t flags = paint.getFlags();
-
-    if (!paint.isLCDRenderText() || !paint.isAntiAlias()) {
-        return flags;
-    }
-
-    if (kUnknown_SkPixelGeometry == fSurfaceProps.pixelGeometry()
-        || this->onShouldDisableLCD(paint)) {
-
-        flags &= ~SkPaint::kLCDRenderText_Flag;
-        flags |= SkPaint::kGenA8FromLCD_Flag;
-    }
-
-    return flags;
-}
 
 sk_sp<SkSurface> SkBaseDevice::makeSurface(SkImageInfo const&, SkSurfaceProps const&) {
     return nullptr;

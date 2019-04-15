@@ -29,9 +29,8 @@ DEF_GPUTEST(GrContextFactory_NVPRContextOptionHasPathRenderingSupport, reporter,
         if (!context) {
             continue;
         }
-        REPORTER_ASSERT(
-            reporter,
-            context->caps()->shaderCaps()->pathRenderingSupport());
+        REPORTER_ASSERT(reporter,
+                        context->contextPriv().caps()->shaderCaps()->pathRenderingSupport());
     }
 }
 
@@ -44,9 +43,8 @@ DEF_GPUTEST(GrContextFactory_NoPathRenderingIfNVPRDisabled, reporter, options) {
         GrContext* context =
             testFactory.get(ctxType, GrContextFactory::ContextOverrides::kDisableNVPR);
         if (context) {
-            REPORTER_ASSERT(
-                reporter,
-                !context->caps()->shaderCaps()->pathRenderingSupport());
+            REPORTER_ASSERT(reporter,
+                            !context->contextPriv().caps()->shaderCaps()->pathRenderingSupport());
         }
     }
 }
@@ -63,11 +61,11 @@ DEF_GPUTEST(GrContextFactory_RequiredSRGBSupport, reporter, options) {
             testFactory.get(ctxType, GrContextFactory::ContextOverrides::kRequireSRGBSupport);
 
         if (context) {
-            REPORTER_ASSERT(reporter, context->caps()->srgbSupport());
+            REPORTER_ASSERT(reporter, context->contextPriv().caps()->srgbSupport());
         } else {
             context = testFactory.get(ctxType);
             if (context) {
-                REPORTER_ASSERT(reporter, !context->caps()->srgbSupport());
+                REPORTER_ASSERT(reporter, !context->contextPriv().caps()->srgbSupport());
             }
         }
     }
@@ -166,7 +164,7 @@ DEF_GPUTEST(GrContextFactory_executorAndTaskGroup, reporter, options) {
 
 DEF_GPUTEST_FOR_ALL_CONTEXTS(GrContextDump, reporter, ctxInfo) {
     // Ensure that GrContext::dump doesn't assert (which is possible, if the JSON code is wrong)
-    SkString result = ctxInfo.grContext()->dump();
+    SkString result = ctxInfo.grContext()->contextPriv().dump();
     REPORTER_ASSERT(reporter, !result.isEmpty());
 }
 
