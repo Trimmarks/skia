@@ -16,11 +16,12 @@
 #include "hb.h"
 #include "hb-subset.h"
 
-template <class T, void(*P)(T*)> using resource = std::unique_ptr<T, SkFunctionWrapper<void, T, P>>;
-using HBBlob = resource<hb_blob_t, hb_blob_destroy>;
-using HBFace = resource<hb_face_t, hb_face_destroy>;
-using HBSubsetInput = resource<hb_subset_input_t, hb_subset_input_destroy>;
-using HBSet = resource<hb_set_t, hb_set_destroy>;
+template <class T, void(*P)(T*)> using resource =
+    std::unique_ptr<T, SkFunctionWrapper<skstd::remove_pointer_t<decltype(P)>, P>>;
+using HBBlob = resource<hb_blob_t, &hb_blob_destroy>;
+using HBFace = resource<hb_face_t, &hb_face_destroy>;
+using HBSubsetInput = resource<hb_subset_input_t, &hb_subset_input_destroy>;
+using HBSet = resource<hb_set_t, &hb_set_destroy>;
 
 static HBBlob to_blob(sk_sp<SkData> data) {
     using blob_size_t = SkCallableTraits<decltype(hb_blob_create)>::argument<1>::type;
@@ -68,7 +69,6 @@ static sk_sp<SkData> subset_harfbuzz(sk_sp<SkData> fontData,
         return nullptr;
     }
     hb_set_t* glyphs = hb_subset_input_glyph_set(input.get());
-    hb_set_add(glyphs, 0);
     glyphUsage.getSetValues([&glyphs](unsigned gid) { hb_set_add(glyphs, gid);});
 
     hb_subset_input_set_retain_gids(input.get(), true);
@@ -99,9 +99,6 @@ static sk_sp<SkData> subset_sfntly(sk_sp<SkData> fontData,
     // Generate glyph id array in format needed by sfntly.
     // TODO(halcanary): sfntly should take a more compact format.
     std::vector<unsigned> subset;
-    if (!glyphUsage.has(0)) {
-        subset.push_back(0);  // Always include glyph 0.
-    }
     glyphUsage.getSetValues([&subset](unsigned v) { subset.push_back(v); });
 
     unsigned char* subsetFont{nullptr};
