@@ -5,23 +5,23 @@
  * found in the LICENSE file.
  */
 
-#include "Resources.h"
-#include "SkDraw.h"
-#include "SkGraphics.h"
-#include "SkMutex.h"
-#include "SkRemoteGlyphCache.h"
-#include "SkRemoteGlyphCacheImpl.h"
-#include "SkStrike.h"
-#include "SkStrikeCache.h"
-#include "SkSurface.h"
-#include "SkSurfacePriv.h"
-#include "SkTextBlob.h"
-#include "SkTypeface_remote.h"
-#include "Test.h"
-#include "TestEmptyTypeface.h"
-#include "ToolUtils.h"
+#include "include/core/SkGraphics.h"
+#include "include/core/SkSurface.h"
+#include "include/core/SkTextBlob.h"
+#include "include/private/SkMutex.h"
+#include "src/core/SkDraw.h"
+#include "src/core/SkRemoteGlyphCache.h"
+#include "src/core/SkRemoteGlyphCacheImpl.h"
+#include "src/core/SkStrike.h"
+#include "src/core/SkStrikeCache.h"
+#include "src/core/SkSurfacePriv.h"
+#include "src/core/SkTypeface_remote.h"
+#include "tests/Test.h"
+#include "tools/Resources.h"
+#include "tools/ToolUtils.h"
+#include "tools/fonts/TestEmptyTypeface.h"
 
-#include "text/GrTextContext.h"
+#include "src/gpu/text/GrTextContext.h"
 
 class DiscardableManager : public SkStrikeServer::DiscardableHandleManager,
                            public SkStrikeClient::DiscardableHandleManager {
@@ -31,14 +31,14 @@ public:
 
     // Server implementation.
     SkDiscardableHandleId createHandle() override {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         // Handles starts as locked.
         fLockedHandles.add(++fNextHandleId);
         return fNextHandleId;
     }
     bool lockHandle(SkDiscardableHandleId id) override {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         if (id <= fLastDeletedHandleId) return false;
         fLockedHandles.add(id);
@@ -47,55 +47,59 @@ public:
 
     // Client implementation.
     bool deleteHandle(SkDiscardableHandleId id) override {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         return id <= fLastDeletedHandleId;
     }
 
     void notifyCacheMiss(SkStrikeClient::CacheMissType type) override {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         fCacheMissCount[type]++;
     }
     bool isHandleDeleted(SkDiscardableHandleId id) override {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         return id <= fLastDeletedHandleId;
     }
 
     void unlockAll() {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         fLockedHandles.reset();
     }
     void unlockAndDeleteAll() {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         fLockedHandles.reset();
         fLastDeletedHandleId = fNextHandleId;
     }
     const SkTHashSet<SkDiscardableHandleId>& lockedHandles() const {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         return fLockedHandles;
     }
     SkDiscardableHandleId handleCount() {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         return fNextHandleId;
     }
     int cacheMissCount(uint32_t type) {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         return fCacheMissCount[type];
     }
     bool hasCacheMiss() const {
-        SkAutoMutexAcquire l(&fMutex);
+        SkAutoMutexExclusive l(fMutex);
 
         for (uint32_t i = 0; i <= SkStrikeClient::CacheMissType::kLast; ++i) {
             if (fCacheMissCount[i] > 0) return true;
         }
         return false;
+    }
+    void resetCacheMissCounts() {
+        SkAutoMutexExclusive l(fMutex);
+        sk_bzero(&fCacheMissCount, sizeof(fCacheMissCount));
     }
 
 private:
@@ -113,7 +117,7 @@ private:
 sk_sp<SkTextBlob> buildTextBlob(sk_sp<SkTypeface> tf, int glyphCount) {
     SkFont font;
     font.setTypeface(tf);
-    font.setHinting(kNormal_SkFontHinting);
+    font.setHinting(SkFontHinting::kNormal);
     font.setSize(1u);
     font.setEdging(SkFont::Edging::kAntiAlias);
     font.setSubpixel(true);
@@ -482,7 +486,7 @@ sk_sp<SkTextBlob> make_blob_causing_fallback(
     SkFont font;
     font.setSubpixel(true);
     font.setSize(96);
-    font.setHinting(kNormal_SkFontHinting);
+    font.setHinting(SkFontHinting::kNormal);
     font.setTypeface(targetTf);
 
     REPORTER_ASSERT(reporter, !SkDraw::ShouldDrawTextAsPaths(font, SkPaint(), SkMatrix::I()));
@@ -575,7 +579,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SkRemoteGlyphCache_DrawTextAsSDFTWithAllARGBF
         SkFont font;
         font.setSubpixel(true);
         font.setSize(96);
-        font.setHinting(kNormal_SkFontHinting);
+        font.setHinting(SkFontHinting::kNormal);
         font.setTypeface(typeface);
 
         REPORTER_ASSERT(reporter, !SkDraw::ShouldDrawTextAsPaths(font, SkPaint(), SkMatrix::I()));
@@ -739,6 +743,76 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SkRemoteGlyphCache_CacheMissReporting, report
     // miss.
     REPORTER_ASSERT(reporter, discardableManager->cacheMissCount(SkStrikeClient::kGlyphImage) == 0);
     REPORTER_ASSERT(reporter, discardableManager->cacheMissCount(SkStrikeClient::kGlyphPath) == 0);
+
+    // Must unlock everything on termination, otherwise valgrind complains about memory leaks.
+    discardableManager->unlockAndDeleteAll();
+}
+
+sk_sp<SkTextBlob> MakeEmojiBlob(sk_sp<SkTypeface> serverTf, SkScalar textSize,
+                                sk_sp<SkTypeface> clientTf = nullptr) {
+    SkFont font;
+    font.setTypeface(serverTf);
+    font.setSize(textSize);
+
+    const char* text = ToolUtils::emoji_sample_text();
+    SkFont serverFont = font;
+    auto blob = SkTextBlob::MakeFromText(text, strlen(text), font);
+    if (clientTf == nullptr) return blob;
+
+    SkSerialProcs s_procs;
+    s_procs.fTypefaceProc = [](SkTypeface*, void* ctx) -> sk_sp<SkData> {
+        return SkData::MakeUninitialized(1u);
+    };
+    auto serialized = blob->serialize(s_procs);
+
+    SkDeserialProcs d_procs;
+    d_procs.fTypefaceCtx = &clientTf;
+    d_procs.fTypefaceProc = [](const void* data, size_t length, void* ctx) -> sk_sp<SkTypeface> {
+        return *(static_cast<sk_sp<SkTypeface>*>(ctx));
+    };
+    return SkTextBlob::Deserialize(serialized->data(), serialized->size(), d_procs);
+}
+
+DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SkRemoteGlyphCache_TypefaceWithNoPaths, reporter, ctxInfo) {
+    sk_sp<DiscardableManager> discardableManager = sk_make_sp<DiscardableManager>();
+    SkStrikeServer server(discardableManager.get());
+    SkStrikeClient client(discardableManager, false);
+
+    auto serverTf = ToolUtils::emoji_typeface();
+    auto serverTfData = server.serializeTypeface(serverTf.get());
+    auto clientTf = client.deserializeTypeface(serverTfData->data(), serverTfData->size());
+    constexpr int width  = 500,
+                  height = 500;
+
+    for (SkScalar textSize : { 70, 180, 270, 340 }) {
+        auto serverBlob = MakeEmojiBlob(serverTf, textSize);
+        auto props = FindSurfaceProps(ctxInfo.grContext());
+        SkTextBlobCacheDiffCanvas cache_diff_canvas(500, 500, props, &server,
+                                                    MakeSettings(ctxInfo.grContext()));
+        SkPaint paint;
+        // Draw on the diff canvas as the same place as RasterBlob.
+        cache_diff_canvas.drawTextBlob(serverBlob.get(), 0, height/2, paint);
+
+        std::vector<uint8_t> serverStrikeData;
+        server.writeStrikeData(&serverStrikeData);
+
+        REPORTER_ASSERT(reporter,
+                        client.readStrikeData(serverStrikeData.data(), serverStrikeData.size()));
+        auto clientBlob = MakeEmojiBlob(serverTf, textSize, clientTf);
+        REPORTER_ASSERT(reporter, clientBlob);
+
+        SkBitmap expected = RasterBlob(
+                serverBlob, width, height, paint, ctxInfo.grContext());
+        SkBitmap actual = RasterBlob(
+                clientBlob, width, height, paint, ctxInfo.grContext());
+
+        // Be sloppy for paths.
+        compare_blobs(expected, actual, reporter, 1);
+
+        REPORTER_ASSERT(reporter, !discardableManager->hasCacheMiss());
+        SkStrikeCache::ValidateGlyphCacheDataSize();
+        discardableManager->resetCacheMissCounts();
+    }
 
     // Must unlock everything on termination, otherwise valgrind complains about memory leaks.
     discardableManager->unlockAndDeleteAll();
